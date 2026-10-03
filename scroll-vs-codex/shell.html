@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scroll vs Codex</title>
+<style>
+  :root {
+    --bg: #14100d; --panel: rgba(24,19,15,.86); --ink: #f0e6d4; --muted: #b9a88f;
+    --line: rgba(240,230,212,.16); --gold: #d0a95c; --gold-ink: #1b140e; --ok: #9fc27a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  #stage::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 55%, rgba(0,0,0,.45) 100%); }
+
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 5;
+    background: radial-gradient(ellipse at 50% 40%, #2a2019 0%, #14100d 70%); }
+  #gate.hidden { display: none; }
+  .card { max-width: 620px; width: 100%; background: rgba(255,255,255,.03); border: 1px solid var(--line);
+    border-radius: 14px; padding: 28px 30px; }
+  .card h1 { margin: 0 0 6px; font: 600 30px/1.2 Georgia, "Iowan Old Style", serif; letter-spacing: .01em; }
+  .card .kicker { color: var(--gold); font-size: 13px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 14px; }
+  .card p { margin: 0 0 12px; color: var(--muted); }
+  .card p strong { color: var(--ink); font-weight: 600; }
+  button { font: inherit; cursor: pointer; border-radius: 999px; border: 1px solid var(--line);
+    background: rgba(255,255,255,.05); color: var(--ink); padding: 9px 18px; }
+  button:hover { background: rgba(255,255,255,.1); }
+  button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  button.primary { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); font-weight: 600; padding: 11px 22px; margin-top: 8px; }
+  button.primary:disabled { opacity: .7; cursor: progress; }
+
+  #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; padding: 0 16px 16px; pointer-events: none; }
+  #hint { text-align: center; color: var(--ink); font-size: 18px; margin-bottom: 10px; text-shadow: 0 1px 6px #000; transition: opacity .3s; }
+  .bar { pointer-events: auto; margin: 0 auto; max-width: 980px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+    justify-content: space-between; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 10px 12px;
+    backdrop-filter: blur(6px); }
+  .seg { display: flex; gap: 4px; background: rgba(0,0,0,.25); border-radius: 999px; padding: 4px; }
+  .seg button { border: 0; background: transparent; padding: 8px 18px; }
+  .seg button[aria-pressed="true"] { background: var(--gold); color: var(--gold-ink); font-weight: 600; }
+  .score { display: flex; gap: 22px; align-items: center; font-variant-numeric: tabular-nums; }
+  .score .item { display: flex; flex-direction: column; min-width: 120px; }
+  .score .lab { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .score .val { font-size: 20px; font-weight: 600; }
+  .score .val.ok { color: var(--ok); }
+  .meter { height: 4px; background: rgba(255,255,255,.12); border-radius: 4px; margin-top: 4px; overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0; background: var(--gold); }
+  .pulse { animation: pulse 1.2s ease-out 1; }
+  @keyframes pulse { 0% { transform: scale(1.25); } 100% { transform: scale(1); } }
+  #title { position: fixed; top: 14px; left: 16px; z-index: 3; font: 600 18px Georgia, serif; color: var(--ink);
+    text-shadow: 0 1px 6px #000; pointer-events: none; }
+  #title span { display: block; font: 13px system-ui, sans-serif; color: var(--muted); letter-spacing: .02em; }
+  @media (max-width: 640px) { .score { gap: 12px; } .score .item { min-width: 90px; } #hint { font-size: 15px; } }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="title" hidden>Scroll vs Codex<span>Find the hidden line in each</span></div>
+
+<div id="gate">
+  <div class="card">
+    <div class="kicker">Past Tech · illustration</div>
+    <h1>Scroll vs Codex</h1>
+    <p>Before you look: these two objects are a <strong>simplified reconstruction</strong>, not replicas of any real manuscript.
+      The scroll is papyrus with Greek text (Homer); the codex is parchment with Latin text (Martial).</p>
+    <p>Each one hides a short message. Find it — and notice what it takes.</p>
+    <button class="primary" id="go">Show the objects</button>
+  </div>
+</div>
+
+<div id="hud" hidden>
+  <div id="hint"></div>
+  <div class="bar">
+    <div class="seg" role="group" aria-label="Choose object">
+      <button id="v-scroll" aria-pressed="true">The scroll</button>
+      <button id="v-codex" aria-pressed="false">The codex</button>
+    </div>
+    <div class="score">
+      <div class="item"><span class="lab">Scroll</span><span class="val" id="s-time">—</span><div class="meter"><i id="s-meter"></i></div></div>
+      <div class="item"><span class="lab">Codex</span><span class="val" id="c-time">—</span></div>
+    </div>
+    <button id="reset">Reset</button>
+  </div>
+</div>
+
+<script>/*THREE*/</script>
+<script>
+/*APP*/
+const $ = s => document.querySelector(s);
+let app = null;
+const ui = {
+  update(st) {
+    $('#v-scroll').setAttribute('aria-pressed', st.view === 'scroll');
+    $('#v-codex').setAttribute('aria-pressed', st.view === 'codex');
+    $('#s-time').textContent = st.scrollFound ? 'Found · ' + st.scrollTime : st.scrollTime;
+    $('#c-time').textContent = st.codexFound ? 'Found · ' + st.codexTime : st.codexTime;
+    $('#s-time').classList.toggle('ok', st.scrollFound);
+    $('#c-time').classList.toggle('ok', st.codexFound);
+    $('#s-meter').style.width = (st.progress * 100).toFixed(1) + '%';
+    let hint;
+    if (st.view === 'scroll') hint = st.scrollFound ? 'Found it. Now try the codex.' : st.progress > 0 ? `Unrolled ${Math.round(st.progress * 100)}% — keep going` : 'Drag the papyrus to the left to unroll it  ←';
+    else hint = st.codexFound ? (st.codexOpen ? 'Found it. Click again to close.' : 'Click to open again') : 'Click the codex to open it';
+    $('#hint').textContent = hint;
+  },
+  flash(which) { const el = $(which === 'scroll' ? '#s-time' : '#c-time'); el.classList.remove('pulse'); void el.offsetWidth; el.classList.add('pulse'); },
+};
+$('#go').addEventListener('click', async () => {
+  const btn = $('#go'); btn.disabled = true; btn.textContent = 'Loading…';
+  try {
+    if (typeof THREE === 'undefined') throw new Error('3D library missing');
+    $('#gate').classList.add('hidden'); $('#hud').hidden = false; $('#title').hidden = false;
+    await new Promise(r => requestAnimationFrame(r));
+    app = start(THREE, $('#stage'), ui);
+  } catch (err) {
+    btn.textContent = 'Could not start 3D here: ' + (err && err.message || err); console.error(err);
+  }
+});
+$('#v-scroll').addEventListener('click', () => app && app.setView('scroll'));
+$('#v-codex').addEventListener('click', () => app && app.setView('codex'));
+$('#reset').addEventListener('click', () => app && app.reset());
+</script>
+</body>
+</html>
