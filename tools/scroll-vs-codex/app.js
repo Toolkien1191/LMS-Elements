@@ -1,17 +1,18 @@
 // Scroll vs Codex — app code. THREE is provided by the loader.
 export function start(THREE, mount, ui) {
-  // ---------- chat-bubble texts (edit wording here) ----------
-  // Scroll bubbles appear on the left, codex bubbles on the right.
+  // ---------- red messages written inside the scroll and the codex (edit wording here) ----------
   const TEXTS = {
-    scrollTimed: [            // [seconds after the first drag, text]; skipped if Book IV is found first
-      [5, "Easy, isn't it?"],
-      [7, 'Both hands busy rolling, btw.'],
-      [9, "One side only. Writing on the back? Nah. Can't be done."],
+    // Scroll: [column number, text]. Each column is roughly 0.6 s of dragging at full speed;
+    // column 9 comes into view after about 4 s. The scroll has 25 columns: 23 is LIBER IV.
+    scroll: [
+      [9, "Easy, isn't it?"],
+      [14, 'Both hands busy rolling, btw.'],
+      [18, "One side only. Writing on the back? Nah. Can't be done."],
     ],
-    scrollFound: 'Done reading? Now roll it all back. If it survives the reroll this time, that is.',
-    codexStep1: 'Book IV? Page 82. Here you go.',                       // click 1: opens on LIBER IV
-    codexStep2: 'The whole Aeneid. The Georgics too. One volume.',      // click 2: pages riffle forward
-    codexStep3: 'Done? Close it. One hand. Off you go.',                // click 3: closes, lifts upright
+    scrollEnd: 'Done reading? Now roll it all back. If it survives the reroll this time, that is.', // right after LIBER IV
+    codexStep1: 'Book IV? Page 82. Here you go.',                   // click 1: on the LIBER IV page
+    codexStep2: 'The whole Aeneid. The Georgics too. One volume.',  // click 2: left page (GEORGICA)
+    codexStep3: 'Done? Close it. One hand. Off you go.',            // click 2: right page (BVCOLICA), invites click 3
   };
 
   // ---------- helpers ----------
@@ -136,6 +137,30 @@ export function start(THREE, mount, ui) {
     }
   }
 
+  // A rubricated message: word-wrapped red lettering with the same hand-set jitter as the text.
+  // Returns the y below the last line.
+  function writeMessage(g, r, text, x0, y0, width, size, ink, align = 'left') {
+    g.font = `600 ${size}px Georgia, 'Times New Roman', serif`;
+    g.textBaseline = 'alphabetic';
+    const lines = []; let line = '';
+    for (const w of text.split(' ')) {
+      const t = line ? line + ' ' + w : w;
+      if (line && g.measureText(t).width > width) { lines.push(line); line = w; } else line = t;
+    }
+    lines.push(line);
+    const lh = size * 1.22;
+    lines.forEach((t, k) => {
+      let x = align === 'center' ? x0 + (width - g.measureText(t).width) / 2 : x0;
+      const y = y0 + size + k * lh;
+      for (const ch of t) {
+        g.fillStyle = `rgba(${ink},${(0.9 + r() * 0.08).toFixed(2)})`;
+        g.save(); g.translate(x, y + (r() - 0.5) * 2); g.rotate((r() - 0.5) * 0.035); g.fillText(ch, 0, 0); g.restore();
+        x += g.measureText(ch).width;
+      }
+    });
+    return y0 + size + (lines.length - 1) * lh + size * 0.35;
+  }
+
   // ---------- papyrus ----------
   function papyrusTile(w, h, seed, vertical) {
     const c = canvas(w, h), g = c.getContext('2d'), r = rng(seed);
@@ -167,7 +192,7 @@ export function start(THREE, mount, ui) {
   const PPU = 320;                 // pixels per world unit on the sheet
   const SH = 2.6;                  // scroll height (world)
   const WV = 6.6;                  // visible window width (world)
-  const COLW = 1.25, PITCH = 1.62, NCOL = 24;   // NCOL = scroll length in columns
+  const COLW = 1.25, PITCH = 1.62, NCOL = 25;   // NCOL = scroll length in columns (last two: LIBER IV, end message)
   const START_MARGIN = 0.9, END_MARGIN = 1.6;
   const L = START_MARGIN + NCOL * PITCH + END_MARGIN;
   const SRC_W = Math.round(L * PPU), SRC_H = Math.round(SH * PPU);
@@ -198,19 +223,32 @@ export function start(THREE, mount, ui) {
     eg.addColorStop(0.94, 'rgba(95,60,25,0)'); eg.addColorStop(1, 'rgba(95,60,25,0.5)');
     g.fillStyle = eg; g.fillRect(0, 0, SRC_W, SRC_H);
 
-    // columns of Greek
+    // columns of Latin, red messages, and LIBER IV at the end
     const ink = '38,24,14', red = '150,38,24';
     const top = 0.33 * PPU, lineH = 25.5, nLines = 26, size = 19;
     const colPx = COLW * PPU;
     const next = stream(AENEID, 0);
+    const msgAt = new Map(TEXTS.scroll);
+    const MSG_SIZE = 56, msgW = colPx + 90;
+    const centred = (text) => { // y0 so that a message sits in the middle of the sheet height
+      g.font = `600 ${MSG_SIZE}px Georgia, serif`;
+      const n = Math.ceil(g.measureText(text).width / (msgW * 0.86));
+      return SRC_H / 2 - (n * MSG_SIZE * 1.22) / 2 - MSG_SIZE * 0.3;
+    };
+    let libX = 0;
     for (let i = 0; i < NCOL; i++) {
       const x0 = (START_MARGIN + i * PITCH) * PPU + (r() - 0.5) * 8;
       const slant = (r() - 0.5) * 6;
-      if (i < NCOL - 1) {
+      if (msgAt.has(i) || i === NCOL - 1) {
+        const text = i === NCOL - 1 ? TEXTS.scrollEnd : msgAt.get(i);
+        writeMessage(g, r, text, x0 - 30, centred(text), msgW, MSG_SIZE, red);
+        if (i === NCOL - 1) msgRange = [libX / PPU - 0.05, (x0 - 30 + msgW) / PPU];
+      } else if (i < NCOL - 2) {
         g.save(); g.translate(slant, 0);
         writeColumn(g, r, next, x0, top + lineH, colPx, nLines, lineH, size, ink);
         g.restore();
       } else {
+        libX = x0;
         // end of Book III, then a paragraphos and the rubricated heading LIBER IV
         writeColumn(g, r, stream(caps('CONTICVIT TANDEM FACTOQVE HIC FINE QVIEVIT '), 0), x0, top + lineH, colPx, 2, lineH, size, ink);
         g.fillStyle = `rgba(${ink},0.85)`; g.fillRect(x0 - 4, top + lineH * 3.1, 46, 2.2);
@@ -225,7 +263,6 @@ export function start(THREE, mount, ui) {
         g.strokeStyle = `rgba(${red},0.8)`; g.lineWidth = 2.4;
         g.beginPath(); g.moveTo(x0, hy + 16); g.bezierCurveTo(x0 + 60, hy + 4, x0 + 120, hy + 28, x0 + 200, hy + 14); g.stroke();
         writeColumn(g, r, stream(AENEID4, 0), x0, hy + lineH * 2.2, colPx, nLines - 8, lineH, size, ink);
-        msgRange = [(x0 / PPU) - 0.05, x0 / PPU + COLW];
       }
     }
     // ragged top/bottom edges and a few losses
@@ -304,7 +341,7 @@ export function start(THREE, mount, ui) {
   const R0L = 0.06, R0R = 0.07, THICK = 0.017;
   const radius = (len, r0) => Math.sqrt(r0 * r0 + THICK * Math.max(0, len) / Math.PI);
   const S_MAX = L - WV;
-  const scrollState = { s: 0, t0: null, found: null, pending: 0, said: 0 };
+  const scrollState = { s: 0, t0: null, found: null, pending: 0 };
   // Papyrus can't be whipped open: input is queued and played out at most MAX_SPEED
   // world units per second (the whole scroll takes > 12 s however fast one drags).
   const MAX_SPEED = 2.6, MAX_PENDING = 1.2;
@@ -335,9 +372,7 @@ export function start(THREE, mount, ui) {
     const vis0 = scrollState.s + rL + 0.05, vis1 = scrollState.s + WV - rR - 0.05;
     if (!scrollState.found && msgRange[0] >= vis0 && msgRange[1] <= vis1) {
       scrollState.found = performance.now() - scrollState.t0;
-      scrollState.said = TEXTS.scrollTimed.length; // skip timed bubbles not yet shown
       ui.flash('scroll');
-      ui.bubble('scroll', TEXTS.scrollFound);
     }
     dirty = true;
   }
@@ -346,7 +381,7 @@ export function start(THREE, mount, ui) {
   // ---------- parchment + leather ----------
   const PW = 2.2, PHt = 3.0, BW = 2.3, BH = 3.14, BT = 0.07, T = 0.36, YS = BT + T / 2;
 
-  function parchment(seed, { title = null, src = AENEID, folio = null, leftPage = false, textOffset = 0 } = {}) {
+  function parchment(seed, { title = null, note = null, src = AENEID, folio = null, leftPage = false, textOffset = 0 } = {}) {
     const w = 1024, h = Math.round(1024 * PHt / PW), c = canvas(w, h), g = c.getContext('2d'), r = rng(seed);
     g.fillStyle = '#ebdcb9'; g.fillRect(0, 0, w, h);
     for (let i = 0; i < 160; i++) {
@@ -393,6 +428,10 @@ export function start(THREE, mount, ui) {
       g.lineWidth = 4; g.strokeStyle = 'rgba(190,150,60,0.85)';
       for (const y of [ty - 78, ty + 22]) { g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke(); }
       startLine = 4;
+    }
+    if (note) { // red message across the page, under the title
+      const y = writeMessage(g, r, note, cols[0], top + lineH * startLine - 20, cols[1] + colW - cols[0], 80, red, 'center');
+      startLine = Math.ceil((y - top) / lineH) + 1;
     }
     writeColumn(g, r, next, cols[0], top + lineH * (startLine + 1), colW, nLines - startLine, lineH, size, ink);
     writeColumn(g, r, next, cols[1], top + lineH * (startLine + 1), colW, nLines - startLine, lineH, size, ink);
@@ -472,8 +511,8 @@ export function start(THREE, mount, ui) {
   backBoard.position.set(BW / 2, BT / 2, 0); backBoard.castShadow = backBoard.receiveShadow = true; book.add(backBoard);
 
   // Right-hand page after click 1 (LIBER IV, "page 82") and after click 2 (BVCOLICA)
-  const bookFourMat = pageMat(parchment(301, { title: 'LIBER IV', src: AENEID4, folio: 'LXXXII' }));
-  const bucolicaMat = pageMat(parchment(302, { title: 'BVCOLICA', src: BVCOLICA }));
+  const bookFourMat = pageMat(parchment(301, { title: 'LIBER IV', note: TEXTS.codexStep1, src: AENEID4, folio: 'LXXXII' }));
+  const bucolicaMat = pageMat(parchment(302, { title: 'BVCOLICA', note: TEXTS.codexStep3, src: BVCOLICA }));
   const halfGeo = new THREE.BoxGeometry(PW, T / 2, PHt);
   const lower = new THREE.Mesh(halfGeo, [edgeMat, edgeMat, bookFourMat, edgeMat, edgeMat, edgeMat]);
   lower.position.set(PW / 2 + 0.02, BT + T / 4, 0); lower.castShadow = lower.receiveShadow = true; book.add(lower);
@@ -517,7 +556,7 @@ export function start(THREE, mount, ui) {
   // Edit the titles here; the last leaf's back is the left page at the end (GEORGICA).
   const RIFFLE = ['LIBER VI', 'LIBER IX', 'LIBER XII'];
   const riffleFronts = [bookFourMat, ...RIFFLE.map((t, i) => pageMat(parchment(510 + i, { title: t, textOffset: 140 * i })))];
-  const riffleBacks = [fillerBackA, fillerBackB, fillerBackA, backMat(parchment(520, { leftPage: true, title: 'GEORGICA', src: GEORGICA }))];
+  const riffleBacks = [fillerBackA, fillerBackB, fillerBackA, backMat(parchment(520, { leftPage: true, title: 'GEORGICA', note: TEXTS.codexStep2, src: GEORGICA }))];
   const riffle = riffleFronts.map((f, i) => makeLeaf(f, riffleBacks[i], YS + 0.014, -(0.001 + i * 0.0015)));
 
   // step: 0 closed · 1 open on LIBER IV · 2 riffled to GEORGICA/BVCOLICA · 3 closed and held up
@@ -561,10 +600,10 @@ export function start(THREE, mount, ui) {
     const natural = 2 * Math.tan(hFov / 2) * 9.1;
     return Math.max(1, need / natural);
   }
-  // Screen framing: shrink the 3D picture (s) and move it down so the chat bubbles in the
-  // upper corners never cover the objects. from/to = object centre, as a fraction of screen
-  // height, before/after. 'held' is the codex lifted upright after click 3.
-  const FRAMES = { scroll: { s: 0.72, from: 0.435, to: 0.62 }, codex: { s: 0.7, from: 0.528, to: 0.6 }, held: { s: 0.5, from: 0.42, to: 0.57 } };
+  // Screen framing: size (s) and vertical position of each object, as a fraction of screen
+  // height (from = centre in the plain camera view, to = where it is shown). 'held' is the
+  // codex lifted upright after click 3, made smaller to leave room for the quotation below it.
+  const FRAMES = { scroll: { s: 1, from: 0.435, to: 0.45 }, codex: { s: 0.97, from: 0.528, to: 0.5 }, held: { s: 0.5, from: 0.42, to: 0.57 } };
   let fromView = 'scroll';
   const mixF = (a, b, t) => ({ s: a.s + (b.s - a.s) * t, from: a.from + (b.from - a.from) * t, to: a.to + (b.to - a.to) * t });
   const frameFor = v => v === 'codex' ? mixF(FRAMES.codex, FRAMES.held, ease(seg(codexState.c, 0.35, 1))) : FRAMES.scroll;
@@ -618,13 +657,13 @@ export function start(THREE, mount, ui) {
     const st = codexState;
     if (st.step === 0) { st.step = 1; if (st.t0 === null) st.t0 = performance.now(); }
     else if (st.step === 1 && st.p === 1) st.step = 2;
-    else if (st.step === 2 && st.q === 1) { st.step = 3; ui.bubble('codex', TEXTS.codexStep3); }
+    else if (st.step === 2 && st.q === 1) st.step = 3;
     else return;
     dirty = true;
   }
 
   function reset() {
-    Object.assign(scrollState, { s: 0, t0: null, found: null, pending: 0, said: 0 });
+    Object.assign(scrollState, { s: 0, t0: null, found: null, pending: 0 });
     leftRoll.mesh.rotation.y = rightRoll.mesh.rotation.y = 0; layoutScroll();
     Object.assign(codexState, { step: 0, p: 0, q: 0, c: 0, t0: null, found: null, done: false }); layoutCodex();
     view = fromView = 'scroll'; camT = 1; camNow.pos.copy(stations.scroll.pos); camNow.target.copy(stations.scroll.target);
@@ -665,18 +704,13 @@ export function start(THREE, mount, ui) {
       moveScroll(step);
       if (scrollState.s <= 0 || scrollState.s >= S_MAX) scrollState.pending = 0;
     }
-    // scroll: timed bubbles, counted from the first drag
-    if (scrollState.t0 !== null && !scrollState.found) {
-      const T = TEXTS.scrollTimed;
-      while (scrollState.said < T.length && now - scrollState.t0 >= T[scrollState.said][0] * 1000) ui.bubble('scroll', T[scrollState.said++][1]);
-    }
     // codex: run the animation for the current step
     const cs = codexState;
     const run = (k, secs) => { cs[k] = Math.min(1, cs[k] + dt / secs); layoutCodex(); active = true; return cs[k] === 1; };
     if (cs.step >= 1 && cs.p < 1 && run('p', OPEN_S)) {
-      cs.found = now - cs.t0; ui.flash('codex'); ui.bubble('codex', TEXTS.codexStep1);
+      cs.found = now - cs.t0; ui.flash('codex');
     } else if (cs.step >= 2 && cs.q < 1 && run('q', RIFFLE_S)) {
-      ui.bubble('codex', TEXTS.codexStep2);
+      // riffle finished
     } else if (cs.step >= 3 && cs.c < 1 && run('c', CLOSE_S)) {
       cs.done = true;
       const sMs = scrollState.found ?? (scrollState.t0 !== null ? now - scrollState.t0 : null);

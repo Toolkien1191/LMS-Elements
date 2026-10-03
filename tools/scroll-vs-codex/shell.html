@@ -10,8 +10,7 @@
   :root {
     --bg: #14100d; --panel: rgba(16,12,9,.92); --ink: #fff8ec; --muted: #e2d3bb;
     --line: rgba(255,248,236,.28); --gold: #e0b45e; --gold-ink: #160f08; --ok: #b6e08a;
-    --scroll-bubble: #e9e9ee; --scroll-text: #111;      /* left, "incoming" */
-    --codex-bubble: #f2cf8a; --codex-text: #2a1608;      /* right, "reply" */
+    --codex-accent: #f2cf8a;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
@@ -43,20 +42,6 @@
     font: 700 max(24px, 5.4vh)/1.1 Georgia, serif; color: var(--ink); white-space: nowrap;
     text-shadow: 0 2px 10px #000, 0 0 2px #000; }
 
-  /* ---- chat bubbles (upper corners) ---- */
-  .chat { position: fixed; top: 2.2vh; z-index: 3; width: min(28vw, 58vh); display: flex; flex-direction: column;
-    gap: 1vh; pointer-events: none; }
-  #chat-scroll { left: 2vw; align-items: flex-start; }
-  #chat-codex { right: 2vw; align-items: flex-end; }
-  .who { font-size: max(13px, 2.1vh); font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-    color: var(--ink); text-shadow: 0 1px 6px #000; padding: 0 .4em; }
-  .bubble { max-width: 100%; padding: .42em .8em; border-radius: 1.1em; font-size: max(16px, 2.65vh); line-height: 1.22;
-    font-weight: 600; box-shadow: 0 .5vh 1.8vh rgba(0,0,0,.5); transform-origin: bottom left;
-    animation: pop .42s cubic-bezier(.2,.9,.3,1.25) both; }
-  #chat-scroll .bubble { background: var(--scroll-bubble); color: var(--scroll-text); border-bottom-left-radius: .3em; }
-  #chat-codex .bubble { background: var(--codex-bubble); color: var(--codex-text); border-bottom-right-radius: .3em; transform-origin: bottom right; }
-  @keyframes pop { 0% { opacity: 0; transform: translateY(1.2vh) scale(.7); } 100% { opacity: 1; transform: none; } }
-
   /* ---- bottom HUD ---- */
   #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; padding: 0 2vw 2vh; pointer-events: none; }
   #hint { text-align: center; color: var(--ink); font-size: max(16px, 3vh); font-weight: 600; margin-bottom: 1.2vh;
@@ -85,7 +70,7 @@
     justify-content: center; flex-wrap: wrap; background: var(--panel); border: 2px solid var(--line); border-radius: 2vh;
     padding: 1.6vh 3vh; animation: fade .6s ease-out both; }
   #final .t { font: 700 max(26px, 6.4vh)/1.1 Georgia, serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  #final .t.codex { color: var(--codex-bubble); }
+  #final .t.codex { color: var(--codex-accent); }
   #final button { font-size: max(18px, 3.2vh); font-weight: 700; }
   @keyframes fade { 0% { opacity: 0; } 100% { opacity: 1; } }
   [hidden] { display: none !important; }
@@ -101,14 +86,12 @@
     <p>Before you look: these two objects are a <strong>simplified reconstruction</strong>, not replicas of any real manuscript.
       Both hold Latin text from Virgil's <em>Aeneid</em>: the scroll is papyrus, the codex is parchment.</p>
     <p>Your task is the same in both: <strong>find Book IV</strong>. Start with the scroll and take your time. Then try the codex.</p>
-    <p>Read the messages as they appear, and notice what each object makes easy or hard.</p>
+    <p>Read the red messages written in each one, and notice what each object makes easy or hard.</p>
     <button class="primary" id="go">Show the objects</button>
   </div>
 </div>
 
 <div id="task" hidden>Find Book IV.</div>
-<div id="chat-scroll" class="chat" aria-live="polite"></div>
-<div id="chat-codex" class="chat" aria-live="polite"></div>
 <div id="quote" hidden>
   <div class="la">“me manus una capit”</div>
   <div class="en">“one hand holds me” (Martial)</div>
@@ -155,12 +138,6 @@ const ui = {
     $('#hint').textContent = hint;
   },
   flash(which) { const el = $(which === 'scroll' ? '#s-time' : '#c-time'); el.classList.remove('pulse'); void el.offsetWidth; el.classList.add('pulse'); },
-  // which: 'scroll' (left, grey) or 'codex' (right, parchment)
-  bubble(which, text) {
-    const box = $('#chat-' + which);
-    if (!box.children.length) { const who = document.createElement('div'); who.className = 'who'; who.textContent = 'The ' + which; box.append(who); }
-    const b = document.createElement('div'); b.className = 'bubble'; b.textContent = text; box.append(b);
-  },
   finale({ scrollMs, scrollFound, codexMs }) {
     const secs = ms => Math.max(1, Math.round(ms / 1000)) + ' s';
     $('#f-scroll').textContent = 'Scroll: ' + (scrollMs === null ? 'not tried' : secs(scrollMs) + (scrollFound ? '' : ' (not finished)'));
@@ -170,7 +147,6 @@ const ui = {
   },
   clear() {
     clearTimeout(finaleTimer);
-    $('#chat-scroll').replaceChildren(); $('#chat-codex').replaceChildren();
     $('#quote').hidden = true; $('#final').hidden = true; $('#bar').hidden = false; $('#hint').hidden = false;
   },
 };
