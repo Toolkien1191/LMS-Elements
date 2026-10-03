@@ -10,7 +10,7 @@ Short messages written in red inside the objects carry the six advantages. Three
 A disclaimer screen shows first. The page is delivered as one self-contained HTML file for the bucket and LMS iframe, with no outside requests at runtime.
 
 Files (in this folder):
-- app.js: all the scene code (scroll, codex, textures, texts, timers, bubble timing). Edit THIS for revisions.
+- app.js: all the scene code (scroll, codex, textures, texts and red messages, timers). Edit THIS for revisions.
 - shell.html: page wrapper (disclaimer text, "Find Book IV." line, quotation, final screen, buttons, colours).
 - build.py: pastes three.js r170 and app.js into shell.html, producing scroll-vs-codex.html. Instructions for fetching the library are at the top of build.py.
 
