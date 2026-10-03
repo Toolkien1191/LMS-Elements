@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scroll vs Codex</title>
+<style>
+  /* Sizes use vh (percent of the window height) so the page looks the same in a small
+     LMS iframe and full-screen on a projector. At 1080 px high, 1vh = 10.8 px. */
+  :root {
+    --bg: #14100d; --panel: rgba(16,12,9,.92); --ink: #fff8ec; --muted: #e2d3bb;
+    --line: rgba(255,248,236,.28); --gold: #e0b45e; --gold-ink: #160f08; --ok: #b6e08a;
+    --scroll-bubble: #e9e9ee; --scroll-text: #111;      /* left, "incoming" */
+    --codex-bubble: #f2cf8a; --codex-text: #2a1608;      /* right, "reply" */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: max(15px, 2.4vh)/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  #stage::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 55%, rgba(0,0,0,.45) 100%); }
+
+  /* ---- disclaimer ---- */
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 5;
+    background: radial-gradient(ellipse at 50% 40%, #2a2019 0%, #14100d 70%); }
+  #gate.hidden { display: none; }
+  .card { max-width: min(92vw, 110vh); width: 100%; background: rgba(255,255,255,.04); border: 2px solid var(--line);
+    border-radius: 16px; padding: 4vh 4.5vh; }
+  .card h1 { margin: 0 0 1vh; font: 700 max(26px, 5.6vh)/1.15 Georgia, "Iowan Old Style", serif; }
+  .card .kicker { color: var(--gold); font-size: max(13px, 2vh); font-weight: 600; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 1.6vh; }
+  .card p { margin: 0 0 1.6vh; color: var(--muted); font-size: max(16px, 2.9vh); }
+  .card p strong { color: var(--ink); font-weight: 700; }
+  button { font: inherit; cursor: pointer; border-radius: 999px; border: 2px solid var(--line);
+    background: rgba(255,255,255,.08); color: var(--ink); padding: .45em 1.1em; }
+  button:hover { background: rgba(255,255,255,.16); }
+  button:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+  button.primary { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); font-weight: 700; padding: .55em 1.4em; margin-top: 1vh; }
+  button.primary:disabled { opacity: .7; cursor: progress; }
+
+  /* ---- task line (top centre) ---- */
+  #task { position: fixed; top: 2.2vh; left: 50%; transform: translateX(-50%); z-index: 3; pointer-events: none;
+    font: 700 max(24px, 5.4vh)/1.1 Georgia, serif; color: var(--ink); white-space: nowrap;
+    text-shadow: 0 2px 10px #000, 0 0 2px #000; }
+
+  /* ---- chat bubbles (upper corners) ---- */
+  .chat { position: fixed; top: 2.2vh; z-index: 3; width: min(28vw, 58vh); display: flex; flex-direction: column;
+    gap: 1vh; pointer-events: none; }
+  #chat-scroll { left: 2vw; align-items: flex-start; }
+  #chat-codex { right: 2vw; align-items: flex-end; }
+  .who { font-size: max(13px, 2.1vh); font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink); text-shadow: 0 1px 6px #000; padding: 0 .4em; }
+  .bubble { max-width: 100%; padding: .42em .8em; border-radius: 1.1em; font-size: max(16px, 2.65vh); line-height: 1.22;
+    font-weight: 600; box-shadow: 0 .5vh 1.8vh rgba(0,0,0,.5); transform-origin: bottom left;
+    animation: pop .42s cubic-bezier(.2,.9,.3,1.25) both; }
+  #chat-scroll .bubble { background: var(--scroll-bubble); color: var(--scroll-text); border-bottom-left-radius: .3em; }
+  #chat-codex .bubble { background: var(--codex-bubble); color: var(--codex-text); border-bottom-right-radius: .3em; transform-origin: bottom right; }
+  @keyframes pop { 0% { opacity: 0; transform: translateY(1.2vh) scale(.7); } 100% { opacity: 1; transform: none; } }
+
+  /* ---- bottom HUD ---- */
+  #hud { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; padding: 0 2vw 2vh; pointer-events: none; }
+  #hint { text-align: center; color: var(--ink); font-size: max(16px, 3vh); font-weight: 600; margin-bottom: 1.2vh;
+    text-shadow: 0 2px 8px #000, 0 0 2px #000; min-height: 1.3em; }
+  .bar { pointer-events: auto; margin: 0 auto; max-width: min(96vw, 150vh); display: flex; flex-wrap: wrap; gap: 1vh 2vh; align-items: center;
+    justify-content: space-between; background: var(--panel); border: 2px solid var(--line); border-radius: 2vh; padding: 1vh 1.4vh; }
+  .seg { display: flex; gap: 4px; background: rgba(0,0,0,.35); border-radius: 999px; padding: 4px; }
+  .seg button { border: 0; background: transparent; padding: .4em 1.1em; font-weight: 600; }
+  .seg button[aria-pressed="true"] { background: var(--gold); color: var(--gold-ink); }
+  .score { display: flex; gap: 3vh; align-items: center; font-variant-numeric: tabular-nums; }
+  .score .item { display: flex; flex-direction: column; min-width: 15vh; }
+  .score .lab { font-size: max(12px, 1.8vh); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .score .val { font-size: max(17px, 3vh); font-weight: 700; }
+  .score .val.ok { color: var(--ok); }
+  .meter { height: .6vh; min-height: 4px; background: rgba(255,255,255,.18); border-radius: 4px; margin-top: .4vh; overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0; background: var(--gold); }
+  .pulse { animation: pulse 1.2s ease-out 1; }
+  @keyframes pulse { 0% { transform: scale(1.25); } 100% { transform: scale(1); } }
+
+  /* ---- after click 3: quotation and final times ---- */
+  #quote { position: fixed; left: 50%; bottom: 15vh; transform: translateX(-50%); z-index: 3; text-align: center;
+    pointer-events: none; white-space: nowrap; text-shadow: 0 2px 10px #000, 0 0 2px #000; animation: fade 1s ease-out both; }
+  #quote .la { font: italic 700 max(24px, 5.2vh)/1.15 Georgia, serif; color: var(--ink); }
+  #quote .en { font: max(16px, 3vh)/1.3 Georgia, serif; color: var(--muted); margin-top: .5vh; }
+  #final { pointer-events: auto; margin: 0 auto; max-width: min(96vw, 150vh); display: flex; gap: 2vh 6vh; align-items: center;
+    justify-content: center; flex-wrap: wrap; background: var(--panel); border: 2px solid var(--line); border-radius: 2vh;
+    padding: 1.6vh 3vh; animation: fade .6s ease-out both; }
+  #final .t { font: 700 max(26px, 6.4vh)/1.1 Georgia, serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #final .t.codex { color: var(--codex-bubble); }
+  #final button { font-size: max(18px, 3.2vh); font-weight: 700; }
+  @keyframes fade { 0% { opacity: 0; } 100% { opacity: 1; } }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="gate">
+  <div class="card">
+    <div class="kicker">Past Tech · illustration</div>
+    <h1>Scroll vs Codex</h1>
+    <p>Before you look: these two objects are a <strong>simplified reconstruction</strong>, not replicas of any real manuscript.
+      Both hold Latin text from Virgil's <em>Aeneid</em>: the scroll is papyrus, the codex is parchment.</p>
+    <p>Your task is the same in both: <strong>find Book IV</strong>. Start with the scroll and take your time. Then try the codex.</p>
+    <p>Read the messages as they appear, and notice what each object makes easy or hard.</p>
+    <button class="primary" id="go">Show the objects</button>
+  </div>
+</div>
+
+<div id="task" hidden>Find Book IV.</div>
+<div id="chat-scroll" class="chat" aria-live="polite"></div>
+<div id="chat-codex" class="chat" aria-live="polite"></div>
+<div id="quote" hidden>
+  <div class="la">“me manus una capit”</div>
+  <div class="en">“one hand holds me” (Martial)</div>
+</div>
+
+<div id="hud" hidden>
+  <div id="hint"></div>
+  <div class="bar" id="bar">
+    <div class="seg" role="group" aria-label="Choose object">
+      <button id="v-scroll" aria-pressed="true">The scroll</button>
+      <button id="v-codex" aria-pressed="false">The codex</button>
+    </div>
+    <div class="score">
+      <div class="item"><span class="lab">Scroll</span><span class="val" id="s-time">—</span><div class="meter"><i id="s-meter"></i></div></div>
+      <div class="item"><span class="lab">Codex</span><span class="val" id="c-time">—</span></div>
+    </div>
+    <button id="reset">Reset</button>
+  </div>
+  <div id="final" hidden>
+    <span class="t" id="f-scroll"></span>
+    <span class="t codex" id="f-codex"></span>
+    <button id="reset2">Reset</button>
+  </div>
+</div>
+
+<script>/*THREE*/</script>
+<script>
+/*APP*/
+const $ = s => document.querySelector(s);
+let app = null, finaleTimer = null;
+const ui = {
+  update(st) {
+    $('#v-scroll').setAttribute('aria-pressed', st.view === 'scroll');
+    $('#v-codex').setAttribute('aria-pressed', st.view === 'codex');
+    $('#s-time').textContent = st.scrollFound ? 'Found · ' + st.scrollTime : st.scrollTime;
+    $('#c-time').textContent = st.codexFound ? 'Found · ' + st.codexTime : st.codexTime;
+    $('#s-time').classList.toggle('ok', st.scrollFound);
+    $('#c-time').classList.toggle('ok', st.codexFound);
+    $('#s-meter').style.width = (st.progress * 100).toFixed(1) + '%';
+    let hint;
+    if (st.view === 'scroll') hint = st.scrollFound ? 'Found it. Now try the codex.' : st.progress > 0 ? `Unrolled ${Math.round(st.progress * 100)}% — keep going` : 'Drag the papyrus to the left to unroll it  ←';
+    else if (st.codexBusy || st.codexStep === 3) hint = '';
+    else hint = ['Click the codex to open it', 'Click again to leaf on', 'Click again to close it'][st.codexStep];
+    $('#hint').textContent = hint;
+  },
+  flash(which) { const el = $(which === 'scroll' ? '#s-time' : '#c-time'); el.classList.remove('pulse'); void el.offsetWidth; el.classList.add('pulse'); },
+  // which: 'scroll' (left, grey) or 'codex' (right, parchment)
+  bubble(which, text) {
+    const box = $('#chat-' + which);
+    if (!box.children.length) { const who = document.createElement('div'); who.className = 'who'; who.textContent = 'The ' + which; box.append(who); }
+    const b = document.createElement('div'); b.className = 'bubble'; b.textContent = text; box.append(b);
+  },
+  finale({ scrollMs, scrollFound, codexMs }) {
+    const secs = ms => Math.max(1, Math.round(ms / 1000)) + ' s';
+    $('#f-scroll').textContent = 'Scroll: ' + (scrollMs === null ? 'not tried' : secs(scrollMs) + (scrollFound ? '' : ' (not finished)'));
+    $('#f-codex').textContent = 'Codex: ' + secs(codexMs);
+    $('#quote').hidden = false;
+    finaleTimer = setTimeout(() => { $('#bar').hidden = true; $('#final').hidden = false; $('#hint').hidden = true; }, 1800);
+  },
+  clear() {
+    clearTimeout(finaleTimer);
+    $('#chat-scroll').replaceChildren(); $('#chat-codex').replaceChildren();
+    $('#quote').hidden = true; $('#final').hidden = true; $('#bar').hidden = false; $('#hint').hidden = false;
+  },
+};
+$('#go').addEventListener('click', async () => {
+  const btn = $('#go'); btn.disabled = true; btn.textContent = 'Loading…';
+  try {
+    if (typeof THREE === 'undefined') throw new Error('3D library missing');
+    $('#gate').classList.add('hidden'); $('#hud').hidden = false; $('#task').hidden = false;
+    await new Promise(r => requestAnimationFrame(r));
+    app = start(THREE, $('#stage'), ui);
+  } catch (err) {
+    btn.textContent = 'Could not start 3D here: ' + (err && err.message || err); console.error(err);
+  }
+});
+$('#v-scroll').addEventListener('click', e => { e.currentTarget.blur(); app && app.setView('scroll'); });
+$('#v-codex').addEventListener('click', e => { e.currentTarget.blur(); app && app.setView('codex'); });
+for (const id of ['#reset', '#reset2']) $(id).addEventListener('click', e => { e.currentTarget.blur(); ui.clear(); app && app.reset(); });
+</script>
+</body>
+</html>
