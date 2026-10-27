@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Penrose</title>
+<style>
+  /* Sizes use vh/vmin so the page reads the same in a small LMS iframe and on a projector. */
+  :root { --bg: #000; --ink: #f4fbff; --line: rgba(190,235,255,.55); --glow: #7fe4ff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font: 600 max(16px, 2.6vh)/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; }
+  /* light that fills the screen as the camera enters the neuron */
+  #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(circle at 50% 50%, #d9f7ff 0%, #4fc6ee 22%, #0d4868 55%, #02101c 100%); }
+  /* black veil: dark first frame and the final fade */
+  #veil { position: fixed; inset: 0; pointer-events: none; background: #000; opacity: 1; }
+  #play { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2;
+    width: max(110px, 24vmin); height: max(110px, 24vmin); border-radius: 50%; cursor: pointer;
+    border: max(3px, .5vmin) solid var(--line); background: rgba(127,228,255,.1); color: var(--ink);
+    display: grid; place-items: center; box-shadow: 0 0 6vmin rgba(127,228,255,.35), inset 0 0 4vmin rgba(127,228,255,.2);
+    transition: background .2s, box-shadow .2s; }
+  #play:hover { background: rgba(127,228,255,.2); box-shadow: 0 0 9vmin rgba(127,228,255,.5), inset 0 0 4vmin rgba(127,228,255,.3); }
+  #play svg { width: 42%; height: 42%; margin-left: 8%; fill: var(--ink); }
+  #play span { position: absolute; top: 100%; margin-top: 2.4vh; font-size: max(20px, 4vh); letter-spacing: .08em; white-space: nowrap; }
+  #replay { position: fixed; right: max(16px, 3vh); bottom: max(16px, 3vh); z-index: 2; cursor: pointer;
+    font: inherit; font-size: max(16px, 2.8vh); color: var(--ink); background: rgba(127,228,255,.12);
+    border: 2px solid var(--line); border-radius: 999px; padding: .45em 1.2em; }
+  #replay:hover { background: rgba(127,228,255,.24); }
+  button:focus-visible { outline: 3px solid var(--glow); outline-offset: 4px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="flash"></div>
+<div id="veil"></div>
+<button id="play" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5v17l14-8.5z"/></svg><span></span></button>
+<button id="replay" type="button" hidden></button>
+
+<script>/*THREE*/</script>
+<script>
+// ======================================================================
+// ON-SCREEN WORDING. Change the text here; nothing else needs touching.
+// ======================================================================
+const WORDS = {
+  play: 'Play',          // label under the large Play button
+  replay: 'Replay',      // small button shown after the scene ends
+};
+// ======================================================================
+
+// ---- timeline (seconds after Play) ----
+const T = {
+  HEAD_IN: 1.6,     // silhouette glows up out of black
+  FLY: 3.6,         // camera starts moving in through the head
+  ARRIVE: 8.6,      // camera reaches the neuron; switch to the inside view
+  SLOW: 12.0,       // drifting microtubules start to slow down
+  SLOWED: 14.0,
+  ALIGN: 13.6,      // first tubule turns into line
+  ALIGN_GAP: 0.15,  // delay between one tubule and the next
+  ALIGN_DUR: 1.4,   // how long a single tubule takes to turn
+  ENDING: 20.6,     // the ending takes over from here
+};
+const ENDINGS = { glow: { duration: 7.4, run: endingGlow } };
+const ENDING = 'glow';
+const TOTAL = T.ENDING + ENDINGS[ENDING].duration;
+
+// ---- colours ----
+const CYAN = new THREE.Color('#5fd8ff');
+const GOLD = new THREE.Color('#ffc65a');
+
+const $ = s => document.querySelector(s);
+$('#play span').textContent = WORDS.play;
+$('#play').setAttribute('aria-label', WORDS.play);
+$('#replay').textContent = WORDS.replay;
+
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const ramp = (t, a, b) => clamp01((t - a) / (b - a));
+const smooth = x => x * x * (3 - 2 * x);
+const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const lerp = (a, b, k) => a + (b - a) * k;
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const rr = (a, b) => a + (b - a) * rnd();
+
+// ---- renderer ----
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setClearColor(0x000000, 1);
+$('#stage').appendChild(renderer.domElement);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.005, 100);
+
+function canvasTex(size, draw) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const dotTex = canvasTex(64, (g, s) => {
+  const r = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(.25, 'rgba(255,255,255,.8)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, s, s);
+});
+const add = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
+function glowSprite(color, opacity = 1, map = dotTex) {
+  return new THREE.Sprite(new THREE.SpriteMaterial({ map, color, opacity, ...add }));
+}
+
+// ======================================================================
+// PART 1: the silhouette and the neurons inside the head
+// ======================================================================
+const headScene = new THREE.Scene();
+
+// head-and-shoulders outline, revolved; shoulders flattened front-to-back
+const PROFILE = [[0, -3.6], [2.1, -3.6], [2.05, -2.4], [2.0, -1.9], [1.75, -1.45], [1.2, -1.22], [0.58, -1.08], [0.43, -0.95],
+  [0.41, -0.62], [0.5, -0.42], [0.66, -0.12], [0.76, 0.2], [0.8, 0.52], [0.75, 0.86], [0.6, 1.14], [0.36, 1.32], [0.001, 1.4]];
+const outline = new THREE.SplineCurve(PROFILE.map(([r, y]) => new THREE.Vector2(r, y))).getPoints(90);   // smooth the corners
+const lathe = new THREE.LatheGeometry(outline, 72);
+{
+  const p = lathe.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const y = p.getY(i), k = smooth(ramp(y, -0.95, -1.3));   // 0 on the head, 1 on the shoulders
+    p.setZ(i, p.getZ(i) * lerp(1.08, 0.42, k));
+  }
+  lathe.computeVertexNormals();
+}
+const rimMat = new THREE.ShaderMaterial({
+  uniforms: { uColor: { value: CYAN.clone() }, uOpacity: { value: 0 } },
+  vertexShader: `varying vec3 vN; varying vec3 vV; varying float vY;
+    void main(){ vY = position.y; vec4 mv = modelViewMatrix * vec4(position,1.); vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
+  fragmentShader: `uniform vec3 uColor; uniform float uOpacity; varying vec3 vN; varying vec3 vV; varying float vY;
+    void main(){ float f = 1. - abs(dot(normalize(vN), normalize(vV))); float g = pow(f, 2.6)*1.25 + .035;
+      g *= smoothstep(-3.3, -2.3, vY);   // the body dissolves downwards, so no bottom edge shows on tall screens
+      gl_FragColor = vec4(uColor*g*uOpacity, 1.); }`,
+  side: THREE.DoubleSide, ...add,
+});
+const silhouette = new THREE.Mesh(lathe, rimMat);
+headScene.add(silhouette);
+
+// fine glowing dust on the surface of the silhouette
+function profileAt(y) {
+  for (let i = 1; i < PROFILE.length; i++) {
+    const [r0, y0] = PROFILE[i - 1], [r1, y1] = PROFILE[i];
+    if (y <= y1) return lerp(r0, r1, (y - y0) / (y1 - y0 || 1));
+  }
+  return 0;
+}
+const skinPts = [], skinCol = [];
+for (let i = 0; i < 1600; i++) {
+  const y = rr(-3.2, 1.38), a = rr(0, Math.PI * 2), r = profileAt(y);
+  const k = smooth(ramp(y, -0.95, -1.3));
+  skinPts.push(Math.cos(a) * r, y, Math.sin(a) * r * lerp(1.08, 0.42, k));
+  const c = smooth(ramp(y, -3.2, -2.3)); skinCol.push(c, c, c);
+}
+const skinGeo = new THREE.BufferGeometry();
+skinGeo.setAttribute('position', new THREE.Float32BufferAttribute(skinPts, 3));
+skinGeo.setAttribute('color', new THREE.Float32BufferAttribute(skinCol, 3));
+const skinMat = new THREE.PointsMaterial({ map: dotTex, color: 0x9fe8ff, vertexColors: true, size: 0.035, opacity: 0, ...add });
+headScene.add(new THREE.Points(skinGeo, skinMat));
+
+// neurons inside the head; the one at TARGET is where the camera goes
+const TARGET = new THREE.Vector3(0.16, 0.56, 0.12);
+const neuronSegs = [], somas = [];
+function branch(from, dir, len, depth, out) {
+  const to = from.clone().addScaledVector(dir, len);
+  out.push(from.x, from.y, from.z, to.x, to.y, to.z);
+  if (depth <= 0) return;
+  const n = depth > 1 ? 2 : 1 + (rnd() < .5 ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const d = dir.clone().add(new THREE.Vector3(rr(-.9, .9), rr(-.9, .9), rr(-.9, .9))).normalize();
+    branch(to, d, len * rr(.55, .8), depth - 1, out);
+  }
+}
+for (let i = 0; i < 22; i++) {
+  const c = i === 0 ? TARGET.clone() : new THREE.Vector3(rr(-.5, .5), rr(0.05, 1.05), rr(-.45, .45));
+  if (i && c.distanceTo(TARGET) < 0.18) c.x += 0.3;
+  somas.push(c);
+  const n = i === 0 ? 6 : 4;
+  for (let k = 0; k < n; k++) {
+    const d = new THREE.Vector3(rr(-1, 1), rr(-1, 1), rr(-1, 1)).normalize();
+    branch(c, d, i === 0 ? 0.11 : 0.09, 2, neuronSegs);
+  }
+}
+const nGeo = new THREE.BufferGeometry();
+nGeo.setAttribute('position', new THREE.Float32BufferAttribute(neuronSegs, 3));
+const nMat = new THREE.LineBasicMaterial({ color: 0x55c8ff, opacity: 0, ...add });
+headScene.add(new THREE.LineSegments(nGeo, nMat));
+const somaSprites = somas.map((p, i) => {
+  const s = glowSprite(i === 0 ? 0xbff2ff : 0x6fd4ff, 0);
+  s.position.copy(p); s.scale.setScalar(i === 0 ? 0.09 : 0.06); headScene.add(s); return s;
+});
+
+// faint far dust so the black is not empty
+function dustField(n, spread, color, size) {
+  const a = [];
+  for (let i = 0; i < n; i++) a.push(rr(-spread, spread), rr(-spread * .7, spread * .7), rr(-spread, -2));
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(a, 3));
+  return new THREE.Points(g, new THREE.PointsMaterial({ map: dotTex, color, size, opacity: 0, ...add }));
+}
+const headDust = dustField(260, 12, 0x3d7fa8, 0.06);
+headScene.add(headDust);
+
+const CAM0 = new THREE.Vector3(0, -0.3, 7.4), LOOK0 = new THREE.Vector3(0, -0.6, 0);
+const v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
+
+function updateHead(t) {
+  const on = smooth(ramp(t, 0.15, T.HEAD_IN));
+  const u = ease(ramp(t, T.FLY, T.ARRIVE));
+  // gentle drift before the fly-in, then in through the forehead to the neuron
+  const camStart = v1.copy(CAM0).setZ(CAM0.z - 0.25 * smooth(ramp(t, 0, T.FLY)));
+  const end = v2.copy(TARGET).add({ x: 0, y: 0, z: 0.035 });
+  camera.position.lerpVectors(camStart, end, u);
+  camera.position.x += Math.sin(u * Math.PI) * 0.35;      // slight curve so the move feels hand-held, not linear
+  camera.position.y += Math.sin(u * Math.PI) * 0.12;
+  const look = new THREE.Vector3().lerpVectors(LOOK0, TARGET, smooth(ramp(u, 0, 0.6)));
+  camera.lookAt(look);
+
+  const inside = smooth(ramp(u, 0.55, 0.78));                  // camera has passed through the surface
+  const breath = 1 + 0.012 * Math.sin(t * 1.3);
+  silhouette.scale.set(1, breath, 1);
+  rimMat.uniforms.uOpacity.value = on * (1 - inside);
+  skinMat.opacity = on * 0.55 * (1 - inside);
+  headDust.material.opacity = on * 0.6;
+  const inner = on * lerp(0.35, 1, smooth(ramp(u, 0.2, 0.7)));
+  nMat.opacity = inner * 0.7;
+  somaSprites.forEach((s, i) => {
+    const tw = 0.75 + 0.25 * Math.sin(t * 2.1 + i * 1.7);
+    s.material.opacity = inner * (i === 0 ? 1 : tw * (1 - 0.6 * smooth(ramp(u, 0.85, 1))));
+  });
+  somaSprites[0].scale.setScalar(0.09 + 0.05 * Math.sin(t * 3) * smooth(ramp(u, 0.4, 0.9)));
+}
+
+// ======================================================================
+// PART 2: inside the neuron, the microtubules
+// ======================================================================
+const cellScene = new THREE.Scene();
+const N_TUBES = 36, TUBE_R = 0.085;
+const AXIS_DIR = new THREE.Vector3(1, 0, 0);     // the aligned tubules lie along x
+const tubeMat = new THREE.ShaderMaterial({
+  uniforms: { uOpacity: { value: 0 }, uSpark: { value: -99 }, uLit: { value: 0 }, uAfter: { value: 0 },
+    uCyan: { value: CYAN.clone() }, uGold: { value: GOLD.clone() } },
+  vertexShader: `varying vec3 vN; varying vec3 vV; varying vec2 vUv; varying float vS;
+    void main(){ vUv = uv; vec4 w = modelMatrix*vec4(position,1.); vS = w.x;
+      vec4 mv = viewMatrix*w; vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
+  fragmentShader: `uniform float uOpacity, uSpark, uLit, uAfter; uniform vec3 uCyan, uGold;
+    varying vec3 vN; varying vec3 vV; varying vec2 vUv; varying float vS;
+    void main(){
+      float f = 1. - abs(dot(normalize(vN), normalize(vV)));
+      float rim = pow(f, 1.6);
+      // 13 protofilaments along the length, with faint tubulin bands
+      float pf = smoothstep(.32, .5, abs(fract(vUv.x*13.) - .5));
+      float band = .82 + .18*smoothstep(.2, .5, abs(fract(vUv.y*34. + vUv.x*3.) - .5));
+      vec3 col = uCyan * (.14 + .9*rim) * (.55 + .45*pf) * band;
+      // the spark's light passing along the tubule, and the warm afterglow it leaves
+      float d = vS - uSpark;
+      float head = exp(-d*d*9.) * uLit;
+      float trail = smoothstep(.2, -2.2, d) * smoothstep(-6., -1.5, d) * uLit;
+      col += uGold * (head*2.2 + trail*.35) * (.4 + .6*rim) + uGold * uAfter * (.25 + .9*rim);
+      gl_FragColor = vec4(col*uOpacity, 1.);
+    }`,
+  side: THREE.DoubleSide, ...add,
+});
+
+const SLOTS = [];
+for (let r = 0; r < 6; r++) for (let c = 0; c < 6; c++)
+  SLOTS.push(new THREE.Vector3(rr(-.12, .12), (r - 2.5) * 0.3, (c - 2.5) * 0.34 + (r % 2 ? 0.085 : -0.085)));
+const ALIGNED_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2);
+const ALIGNED_Q2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+const order = [...Array(N_TUBES).keys()].sort(() => rnd() - .5);
+const tubes = [];
+for (let i = 0; i < N_TUBES; i++) {
+  const len = rr(2.6, 3.2);
+  const g = new THREE.CylinderGeometry(TUBE_R, TUBE_R, len, 14, 1, true);
+  const m = new THREE.Mesh(g, tubeMat);
+  cellScene.add(m);
+  tubes.push({
+    mesh: m, p0: new THREE.Vector3(rr(-3.6, 3.6), rr(-2.1, 2.1), rr(-2.4, 1.6)),
+    vel: new THREE.Vector3(rr(-.25, .25), rr(-.18, .18), rr(-.15, .15)),
+    q0: new THREE.Quaternion().setFromEuler(new THREE.Euler(rr(0, 6.3), rr(0, 6.3), rr(0, 6.3))),
+    spinAxis: new THREE.Vector3(rr(-1, 1), rr(-1, 1), rr(-1, 1)).normalize(), spin: rr(0.5, 1.1) * (rnd() < .5 ? -1 : 1),
+    slot: SLOTS[i], tAlign: T.ALIGN + order[i] * T.ALIGN_GAP, wob: rr(0, 6.3),
+  });
+}
+
+// cytoplasm: drifting specks and a few large soft shapes for depth
+const cellDust = dustField(700, 9, 0x4aa6d6, 0.045);
+cellDust.geometry.attributes.position.array.forEach((_, i, a) => { if (i % 3 === 2) a[i] = rr(-7, 4); });
+cellScene.add(cellDust);
+const blobs = [];
+for (let i = 0; i < 7; i++) {
+  const b = glowSprite(i % 2 ? 0x1b5d8a : 0x16496e, 0);
+  b.position.set(rr(-6, 6), rr(-3.5, 3.5), rr(-9, -5)); b.scale.setScalar(rr(3, 6)); b.userData.o = rr(.25, .45);
+  cellScene.add(b); blobs.push(b);
+}
+
+// how far each tubule has tumbled: full speed, then slowing down
+function phase(t) {
+  const a = T.ARRIVE - 1, s0 = T.SLOW, s1 = T.SLOWED, lo = 0.15;
+  if (t < s0) return t - a;
+  const k = Math.min(t, s1) - s0, span = s1 - s0;
+  let p = (s0 - a) + k - (1 - lo) * k * k / (2 * span);
+  if (t > s1) p += (t - s1) * lo;
+  return p;
+}
+
+const CELL_CAM = new THREE.Vector3(-3.0, 1.5, 6.6), CELL_LOOK = new THREE.Vector3(0.15, 0, 0);
+const qd = new THREE.Quaternion(), qa = new THREE.Quaternion(), qs = new THREE.Quaternion(), pd = new THREE.Vector3();
+function updateCell(t, look = CELL_LOOK) {
+  const arrive = smooth(ramp(t, T.ARRIVE - 0.2, T.ARRIVE + 0.9));
+  // gentle settling move of the camera, slowly circling a little
+  const s = smooth(ramp(t, T.ARRIVE, TOTAL));
+  camera.position.set(lerp(CELL_CAM.x, -1.2, s), lerp(CELL_CAM.y, 1.0, s), lerp(CELL_CAM.z + 1.4, CELL_CAM.z - 0.9, smooth(ramp(t, T.ARRIVE - .5, T.ENDING))));
+  camera.lookAt(look);
+
+  const ph = phase(t);
+  for (const tb of tubes) {
+    pd.copy(tb.p0).addScaledVector(tb.vel, ph);
+    pd.y += Math.sin(ph * .7 + tb.wob) * 0.12;
+    qd.setFromAxisAngle(tb.spinAxis, ph * tb.spin).premultiply(tb.q0);
+    const k = ease(ramp(t, tb.tAlign, tb.tAlign + T.ALIGN_DUR));
+    if (k > 0) {
+      qs.copy(Math.abs(qd.dot(ALIGNED_Q)) >= Math.abs(qd.dot(ALIGNED_Q2)) ? ALIGNED_Q : ALIGNED_Q2);
+      qa.slerpQuaternions(qd, qs, k);
+      tb.mesh.quaternion.copy(qa);
+      tb.mesh.position.lerpVectors(pd, tb.slot, k);
+      tb.mesh.position.y += Math.sin(t * 1.1 + tb.wob) * 0.012 * k;   // aligned, but still alive
+    } else {
+      tb.mesh.quaternion.copy(qd);
+      tb.mesh.position.copy(pd);
+    }
+  }
+  tubeMat.uniforms.uOpacity.value = arrive;
+  cellDust.material.opacity = arrive * 0.55;
+  cellDust.rotation.y = t * 0.01;
+  blobs.forEach(b => b.material.opacity = arrive * b.userData.o);
+}
+
+// ======================================================================
+// THE SPARK. Built once, kept separate so it can be reused elsewhere.
+// Look: white-hot core, thin golden ring, long four-point star with
+// shorter diagonal rays, and a short comet tail.
+// ======================================================================
+function makeSpark() {
+  const coreTex = canvasTex(128, (g, s) => {
+    const r = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(.12, 'rgba(255,252,236,1)');
+    r.addColorStop(.3, 'rgba(255,206,110,.6)'); r.addColorStop(.62, 'rgba(255,150,50,.16)'); r.addColorStop(1, 'rgba(255,120,30,0)');
+    g.fillStyle = r; g.fillRect(0, 0, s, s);
+  });
+  const ringTex = canvasTex(256, (g, s) => {
+    g.strokeStyle = 'rgba(255,228,160,.95)'; g.lineWidth = s * 0.018; g.shadowColor = 'rgba(255,190,80,1)'; g.shadowBlur = s * 0.05;
+    g.beginPath(); g.arc(s / 2, s / 2, s * 0.36, 0, Math.PI * 2); g.stroke(); g.stroke();
+  });
+  const rayTex = canvasTex(512, (g, s) => {
+    const c = s / 2;
+    const ray = (ang, len, w) => {
+      g.save(); g.translate(c, c); g.rotate(ang);
+      const lg = g.createLinearGradient(0, 0, len, 0);
+      lg.addColorStop(0, 'rgba(255,250,230,1)'); lg.addColorStop(.35, 'rgba(255,214,130,.55)'); lg.addColorStop(1, 'rgba(255,170,60,0)');
+      g.fillStyle = lg; g.beginPath(); g.moveTo(0, -w); g.lineTo(len, 0); g.lineTo(0, w); g.closePath(); g.fill(); g.restore();
+    };
+    for (let i = 0; i < 4; i++) ray(i * Math.PI / 2, c * 0.98, s * 0.012);
+    for (let i = 0; i < 4; i++) ray(Math.PI / 4 + i * Math.PI / 2, c * 0.42, s * 0.008);
+  });
+  const group = new THREE.Group();
+  const halo = glowSprite(0xffa640, 0, coreTex), core = glowSprite(0xffffff, 0, coreTex);
+  const ring = glowSprite(0xffffff, 0, ringTex), rays = glowSprite(0xffffff, 0, rayTex);
+  group.add(halo, ring, rays, core);
+  const tail = [];
+  for (let i = 0; i < 16; i++) { const s = glowSprite(0xffd38a, 0, coreTex); tail.push(s); group.add(s); }
+  return {
+    group,
+    // pos: where the spark is; path(dt) gives its position dt seconds ago (for the tail)
+    update(time, pos, size, opacity, path) {
+      const fl = 1 + 0.06 * Math.sin(time * 41) + 0.04 * Math.sin(time * 23.7);
+      for (const s of [halo, core, ring, rays]) s.position.copy(pos);
+      core.scale.setScalar(size * 0.55 * fl); core.material.opacity = opacity;
+      halo.scale.setScalar(size * 1.6); halo.material.opacity = opacity * 0.55;
+      ring.scale.setScalar(size * (1.15 + 0.06 * Math.sin(time * 6))); ring.material.opacity = opacity * 0.85;
+      rays.scale.setScalar(size * 2.4 * fl); rays.material.opacity = opacity; rays.material.rotation = time * 0.35;
+      tail.forEach((s, i) => {
+        const k = 1 - i / tail.length;
+        if (path) s.position.copy(path((i + 1) * 0.022)); else s.position.copy(pos);
+        s.scale.setScalar(size * 0.42 * k); s.material.opacity = path ? opacity * k * 0.5 : 0;
+      });
+    },
+  };
+}
+const spark = makeSpark();
+cellScene.add(spark.group);
+const wash = glowSprite(0xffcf7a, 0, spark.group.children[0].material.map);   // the bloom that fills the view
+cellScene.add(wash);
+
+// ======================================================================
+// ENDING "glow": the spark runs along the aligned tubules and blooms,
+// holds, then everything fades to dark.  te = seconds since T.ENDING.
+// A second ending can be added to ENDINGS above; it gets the same scene.
+// ======================================================================
+function endingGlow(t, te) {
+  const RUN0 = 0.3, RUN1 = 3.0, BLOOM = 4.0, HOLD = 5.4, OUT = 7.2;
+  const X0 = -2.4, X1 = 1.9;
+  const sAt = tt => lerp(X0, X1, Math.pow(ramp(tt, RUN0, RUN1), 1.6));      // accelerating run
+  const sNow = sAt(te);
+  const look = new THREE.Vector3(lerp(CELL_LOOK.x, X1, smooth(ramp(te, RUN0, BLOOM))), 0, 0);
+  updateCell(t, look);
+
+  const pos = new THREE.Vector3(sNow, 0.02, 0.0);
+  const appear = smooth(ramp(te, 0, RUN0 + 0.2));
+  const bloom = smooth(ramp(te, RUN1 - 0.1, BLOOM));
+  const pulse = 1 + 0.06 * Math.sin(te * 3.2) * ramp(te, BLOOM, HOLD);
+  spark.update(t, pos, (0.55 + 1.9 * bloom) * pulse, appear,
+    te < RUN1 ? dt => new THREE.Vector3(sAt(te - dt), 0.02, 0) : null);
+
+  tubeMat.uniforms.uSpark.value = te < RUN1 + 0.4 ? sNow : 99;
+  tubeMat.uniforms.uLit.value = appear * (1 - bloom);
+  tubeMat.uniforms.uAfter.value = bloom * 0.7 * pulse;
+  wash.position.copy(pos);
+  wash.scale.setScalar(lerp(1, 16, bloom) * pulse);
+  wash.material.opacity = bloom * 0.75;
+
+  return smooth(ramp(te, HOLD, OUT));     // how dark the screen should be
+}
+
+function resetEnding() {
+  spark.update(0, new THREE.Vector3(), 0.01, 0, null);
+  tubeMat.uniforms.uSpark.value = -99; tubeMat.uniforms.uLit.value = 0; tubeMat.uniforms.uAfter.value = 0;
+  wash.material.opacity = 0;
+}
+
+// ======================================================================
+// framing, playback
+// ======================================================================
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight, a = w / h;
+  renderer.setSize(w, h, false);
+  camera.aspect = a;
+  // keep at least ~40 deg across in portrait too, so nothing is cut off on phones
+  camera.fov = a >= 1 ? 40 : Math.min(80, 2 * Math.atan(Math.tan(20 * Math.PI / 180) / a) * 180 / Math.PI);
+  camera.updateProjectionMatrix();
+}
+
+const flash = $('#flash'), veil = $('#veil');
+function frame(t) {
+  let dark = 1 - smooth(ramp(t, 0, 0.6));
+  if (t < T.ARRIVE) {
+    updateHead(t);
+    renderer.render(headScene, camera);
+  } else {
+    if (t >= T.ENDING) dark = Math.max(dark, ENDINGS[ENDING].run(t, t - T.ENDING));
+    else { resetEnding(); updateCell(t); }
+    renderer.render(cellScene, camera);
+  }
+  flash.style.opacity = (ramp(t, T.ARRIVE - 0.9, T.ARRIVE) * (1 - ramp(t, T.ARRIVE, T.ARRIVE + 1.1))).toFixed(3);
+  veil.style.opacity = dark.toFixed(3);
+}
+
+let playing = false, clock = 0, last = 0;
+function tick(now) {
+  if (!playing) return;
+  clock += Math.min(0.1, (now - last) / 1000);   // a hidden tab pauses instead of skipping ahead
+  last = now;
+  frame(Math.min(clock, TOTAL));
+  if (clock >= TOTAL) { playing = false; $('#replay').hidden = false; $('#replay').focus({ preventScroll: true }); return; }
+  requestAnimationFrame(tick);
+}
+function play() {
+  $('#play').hidden = true; $('#replay').hidden = true;
+  resetEnding();
+  clock = 0; playing = true; last = performance.now();
+  requestAnimationFrame(tick);
+}
+$('#play').addEventListener('click', play);
+$('#replay').addEventListener('click', play);
+window.addEventListener('resize', () => { resize(); if (!playing) frame(clock ? TOTAL : 0); });
+resize();
+frame(0);
+</script>
+</body>
+</html>
