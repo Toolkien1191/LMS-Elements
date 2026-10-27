@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Republic</title>
+<style>
+  /* Sizes use vh/vw so the page reads the same in a small iframe and on a projector. */
+  :root {
+    --bg: #04060a; --ink: #eaf6ff; --muted: rgba(234,246,255,.7);
+    --warm: #ffc874; --warm-hi: #fff4dc; --line: rgba(255,200,116,.38);
+    --panel: rgba(5,8,12,.95);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; }
+  #vignette { position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%); }
+
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--warm); outline-offset: 4px; }
+
+  /* ---- Play ---- */
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; z-index: 5; background: rgba(0,0,0,.35); }
+  #gate[hidden] { display: none; }
+  #play { display: flex; align-items: center; gap: .55em; padding: .55em 1.3em .55em 1em;
+    font-size: max(24px, min(7vh, 9vw)); font-weight: 700; letter-spacing: .04em;
+    color: var(--bg); background: var(--ink); border: 0; border-radius: 999px;
+    box-shadow: 0 0 0 .18em rgba(234,246,255,.18), 0 0 1.6em rgba(169,220,255,.45); }
+  #play:hover { background: #fff; }
+  #play svg { width: .9em; height: .9em; fill: currentColor; }
+
+  /* ---- terminal label + click target (positioned from the 3D scene) ---- */
+  #termLabel { position: fixed; left: 0; top: 0; z-index: 2; pointer-events: none; opacity: 0; white-space: nowrap;
+    font: 700 max(14px, min(3.4vh, 4.2vw))/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .08em; color: var(--warm-hi);
+    text-shadow: 0 0 .5em rgba(255,190,90,.75), 0 0 2px #000, 0 2px 8px #000; }
+  #termHit { position: fixed; left: 0; top: 0; z-index: 3; padding: 0; border: 0; border-radius: 1vh;
+    background: transparent; display: none; }
+  #termHit.on { display: block; }
+
+  /* ---- Replay ---- */
+  #replay { position: fixed; right: max(16px, 2.5vh); bottom: max(16px, 2.5vh); z-index: 4;
+    font-size: max(14px, 2.4vh); font-weight: 600; padding: .45em 1.1em; border-radius: 999px;
+    background: rgba(255,255,255,.08); border: 2px solid rgba(234,246,255,.3); }
+  #replay:hover { background: rgba(255,255,255,.16); }
+  #replay[hidden] { display: none; }
+
+  /* ---- message panel ---- */
+  #panelWrap { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 16px;
+    background: rgba(0,0,0,.5); }
+  #panelWrap[hidden] { display: none; }
+  #panel { width: min(100%, 130vh); background: var(--panel); border: 2px solid var(--line); border-radius: 1.6vh;
+    box-shadow: 0 0 4vh rgba(255,180,80,.12), 0 2vh 6vh rgba(0,0,0,.7); overflow: hidden;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  #panel .bar { display: flex; align-items: center; justify-content: space-between; gap: 2vh;
+    padding: 1vh 1vh 1vh 2.4vh; border-bottom: 2px solid var(--line); }
+  #panel .title { font-size: max(12px, min(2.2vh, 3.2vw)); font-weight: 700; letter-spacing: .14em; color: var(--warm); opacity: .85;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #close { flex: none; width: max(40px, 5.6vh); height: max(40px, 5.6vh); border-radius: 50%; border: 2px solid var(--line);
+    background: transparent; color: var(--warm-hi); display: grid; place-items: center; padding: 0; }
+  #close:hover { background: rgba(255,200,116,.14); }
+  #close svg { width: 45%; height: 45%; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
+  #screen { padding: 3.6vh 3.6vh 4.4vh; min-height: 34vh;
+    font-size: max(15px, min(4.4vh, 3.7vw)); line-height: 1.55; color: #ffd38c; }
+  #screen .line { margin: 0; white-space: pre-wrap; transition: opacity 2.2s ease, color 2.2s ease, text-shadow 2.2s ease; }
+  #screen .line + .line { margin-top: .35em; }
+  #screen.resolved .line:not(.final) { opacity: .09; }
+  #screen.resolved .line.final { color: var(--warm-hi);
+    text-shadow: 0 0 .3em rgba(255,214,140,.95), 0 0 .9em rgba(255,176,64,.7), 0 0 2em rgba(255,150,40,.45); }
+  .caret { display: inline-block; width: .6em; height: 1.05em; margin-left: .08em; vertical-align: -.15em;
+    background: currentColor; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="vignette"></div>
+<div id="termLabel"></div>
+<button id="termHit" type="button"></button>
+<button id="replay" type="button" hidden></button>
+<div id="gate"><button id="play" type="button"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 .8 9.2 5 1.5 9.2z"/></svg><span></span></button></div>
+<div id="panelWrap" hidden>
+  <div id="panel" role="dialog" aria-modal="true" aria-labelledby="panelTitle">
+    <div class="bar"><span class="title" id="panelTitle"></span>
+      <button id="close" type="button"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8M8 2 2 8"/></svg></button></div>
+    <div id="screen" aria-live="polite"></div>
+  </div>
+</div>
+<script>/*THREE*/</script>
+<script>
+"use strict";
+(function () {
+
+// =====================================================================
+// ON-SCREEN WORDING. Change text here only; nothing below needs editing.
+// =====================================================================
+const TEXT = {
+  play: 'Play',
+  replay: 'Replay',
+  terminalLabel: 'CENTRAL BANK — TERMINAL 7',
+  terminalButton: 'Open Central Bank terminal 7',   // read out by screen readers only
+  panelTitle: 'CENTRAL BANK — TERMINAL 7',
+  close: 'Close',                                   // read out by screen readers only
+  message: [
+    '> Initiating the AVAST sequence.',
+    '> Going on account now.',
+    '> Switching to the Prey-and-Pay mode.',
+    '> Print: All prizes for the Republic',
+  ],
+};
+
+// Timeline, in seconds after Play.
+const T = {
+  centreOn: 0.35,          // the first node lights
+  netStart: 1.1,           // first wave leaves the centre
+  netEnd: 16,              // last (far off-screen) nodes fire
+  pullStart: 0.6, pullEnd: 19.5,   // camera pulls back
+  zStart: 4.6, zEndMin: 22, minHalfWidth: 7.5,
+  waveEvery: 0.85,         // nodes fire in bursts this far apart
+};
+const SEED = 7;            // same network every time
+const FOV = 50, TAN = Math.tan(FOV * Math.PI / 360);
+
+const $ = (id) => document.getElementById(id);
+const ui = { stage: $('stage'), gate: $('gate'), play: $('play'), replay: $('replay'), label: $('termLabel'),
+  hit: $('termHit'), wrap: $('panelWrap'), title: $('panelTitle'), close: $('close'), screen: $('screen') };
+ui.play.querySelector('span').textContent = TEXT.play;
+ui.replay.textContent = TEXT.replay;
+ui.label.textContent = TEXT.terminalLabel;
+ui.hit.setAttribute('aria-label', TEXT.terminalButton);
+ui.title.textContent = TEXT.panelTitle;
+ui.close.setAttribute('aria-label', TEXT.close);
+
+// ---------------------------------------------------------------------
+// Renderer, camera
+// ---------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setClearColor(0x04060a, 1);
+ui.stage.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 200);
+
+function rng(seed) {   // mulberry32
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const easeInOut = (x) => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+
+// ---------------------------------------------------------------------
+// Glowing nodes and growing links (shared by the network and by endings)
+// ---------------------------------------------------------------------
+const shared = { uTime: { value: 0 }, uScale: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) }, uPx: { value: 1 } };
+
+function makeNodes(list, color, flashColor, dimUniform) {
+  // list: [{x,y,z,fire,size}]
+  const n = list.length, pos = new Float32Array(n * 3), fire = new Float32Array(n), size = new Float32Array(n), seed = new Float32Array(n);
+  const r = rng(n * 31 + 5);
+  list.forEach((p, i) => { pos.set([p.x, p.y, p.z], i * 3); fire[i] = p.fire; size[i] = p.size; seed[i] = r(); });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aFire', new THREE.BufferAttribute(fire, 1));
+  g.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+  g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  const m = new THREE.ShaderMaterial({
+    uniforms: { uTime: shared.uTime, uScale: shared.uScale, uPx: shared.uPx, uDim: dimUniform,
+      uColor: { value: new THREE.Color(color) }, uFlash: { value: new THREE.Color(flashColor) } },
+    vertexShader: `
+      uniform float uTime, uScale, uPx, uDim;
+      attribute float aFire, aSize, aSeed;
+      varying float vB, vF;
+      void main() {
+        float age = uTime - aFire;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mv;
+        if (age < 0.0) { gl_PointSize = 0.0; vB = 0.0; vF = 0.0; return; }
+        float flash = exp(-age * 2.6);
+        float on = smoothstep(0.0, 0.12, age);
+        float shimmer = 0.8 + 0.2 * sin(uTime * (0.6 + aSeed * 0.8) + aSeed * 40.0);
+        vF = flash;
+        vB = on * mix(0.8 * shimmer * uDim, 1.2, flash);
+        float px = aSize * uScale / -mv.z;
+        gl_PointSize = clamp(px, 8.0 * uPx, 46.0 * uPx) * (1.0 + 1.1 * flash) * on;
+      }`,
+    fragmentShader: `
+      uniform vec3 uColor, uFlash;
+      varying float vB, vF;
+      void main() {
+        float d = length(gl_PointCoord - 0.5) * 2.0;
+        if (d > 1.0) discard;
+        float core = smoothstep(0.34, 0.12, d);
+        float halo = exp(-d * d * 6.0) * 0.6;
+        gl_FragColor = vec4(mix(uColor, uFlash, vF) * (core + halo) * vB, 1.0);
+      }`,
+    transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+  });
+  const pts = new THREE.Points(g, m);
+  pts.frustumCulled = false;
+  return pts;
+}
+
+function makeLinks(list, color, headColor, widthPx, alpha, dimUniform) {
+  // list: [{a:{x,y,z}, b:{x,y,z}, t0, t1}]  link grows from a (at t0) to b (at t1)
+  const n = list.length;
+  const A = new Float32Array(n * 12), B = new Float32Array(n * 12), C = new Float32Array(n * 8), TT = new Float32Array(n * 8);
+  const idx = new Uint32Array(n * 6), corners = [0, -1, 0, 1, 1, -1, 1, 1];
+  list.forEach((e, i) => {
+    for (let k = 0; k < 4; k++) {
+      A.set([e.a.x, e.a.y, e.a.z], i * 12 + k * 3); B.set([e.b.x, e.b.y, e.b.z], i * 12 + k * 3);
+      C.set([corners[k * 2], corners[k * 2 + 1]], i * 8 + k * 2); TT.set([e.t0, Math.max(e.t1, e.t0 + 0.05)], i * 8 + k * 2);
+    }
+    const o = i * 4; idx.set([o, o + 1, o + 2, o + 2, o + 1, o + 3], i * 6);
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(A, 3));
+  g.setAttribute('aB', new THREE.BufferAttribute(B, 3));
+  g.setAttribute('aCorner', new THREE.BufferAttribute(C, 2));
+  g.setAttribute('aTimes', new THREE.BufferAttribute(TT, 2));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  const m = new THREE.ShaderMaterial({
+    uniforms: { uTime: shared.uTime, uRes: shared.uRes, uPx: shared.uPx, uDim: dimUniform, uWidth: { value: widthPx }, uAlpha: { value: alpha },
+      uColor: { value: new THREE.Color(color) }, uHead: { value: new THREE.Color(headColor) } },
+    vertexShader: `
+      uniform vec2 uRes; uniform float uWidth, uPx;
+      attribute vec3 aB; attribute vec2 aCorner, aTimes;
+      varying float vT, vSide; varying vec2 vTimes;
+      void main() {
+        vec4 ca = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec4 cb = projectionMatrix * modelViewMatrix * vec4(aB, 1.0);
+        vec2 dir = (cb.xy / cb.w - ca.xy / ca.w) * uRes;
+        float L = length(dir);
+        dir = L > 1e-4 ? dir / L : vec2(1.0, 0.0);
+        vec4 c = mix(ca, cb, aCorner.x);
+        c.xy += vec2(-dir.y, dir.x) * aCorner.y * uWidth * uPx / uRes * c.w;
+        gl_Position = c;
+        vT = aCorner.x; vSide = aCorner.y; vTimes = aTimes;
+      }`,
+    fragmentShader: `
+      uniform float uTime, uDim, uAlpha; uniform vec3 uColor, uHead;
+      varying float vT, vSide; varying vec2 vTimes;
+      void main() {
+        float prog = clamp((uTime - vTimes.x) / (vTimes.y - vTimes.x), 0.0, 1.0);
+        if (uTime < vTimes.x || vT > prog) discard;
+        float since = uTime - vTimes.y;
+        float head = since < 0.0 ? smoothstep(0.3, 0.0, prog - vT) : 0.0;
+        float fresh = since < 0.0 ? 1.0 : exp(-since * 1.6);
+        float edge = 1.0 - smoothstep(0.3, 1.0, abs(vSide));
+        float b = uAlpha * mix(uDim, 1.9, fresh * 0.55) + head * 1.1;
+        gl_FragColor = vec4(mix(uColor, uHead, head) * b * edge, 1.0);
+      }`,
+    transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+// ---------------------------------------------------------------------
+// The network (opening, steps 1-2)
+// ---------------------------------------------------------------------
+function growNetwork(clearZones) {
+  const r = rng(SEED), R = 31, nodes = [{ x: 0, y: 0, z: 0, d: 0, dx: 1, dy: 0 }], links = [];
+  const cell = 0.7, grid = new Map(), key = (x, y) => Math.floor(x / cell) + ',' + Math.floor(y / cell);
+  const put = (i) => { const k = key(nodes[i].x, nodes[i].y); (grid.get(k) || grid.set(k, []).get(k)).push(i); };
+  const near = (x, y, rad) => {
+    const out = [], c = Math.ceil(rad / cell), gx = Math.floor(x / cell), gy = Math.floor(y / cell);
+    for (let i = -c; i <= c; i++) for (let j = -c; j <= c; j++) {
+      const l = grid.get((gx + i) + ',' + (gy + j)); if (!l) continue;
+      for (const n of l) if (Math.hypot(nodes[n].x - x, nodes[n].y - y) < rad) out.push(n);
+    }
+    return out;
+  };
+  put(0);
+  const queue = [0];
+  while (queue.length && nodes.length < 1600) {
+    const i = queue.shift(), p = nodes[i], rad = Math.hypot(p.x, p.y), step = 0.8 + rad * 0.045;
+    const kids = i === 0 ? 7 : (r() < 0.5 ? 1 : r() < 0.7 ? 2 : 3);
+    for (let k = 0; k < kids; k++) {
+      let ang = i === 0 ? (k / kids) * Math.PI * 2 + r() * 0.5 : Math.atan2(p.dy, p.dx) + (r() - 0.5) * 1.7;
+      let placed = false;
+      for (let tries = 0; tries < 4 && !placed; tries++, ang += (r() - 0.5) * 1.2) {
+        const len = step * (0.85 + r() * 0.5), x = p.x + Math.cos(ang) * len, y = p.y + Math.sin(ang) * len;
+        if (Math.hypot(x, y) > R) continue;
+        if (clearZones.some((z) => Math.hypot(x - z.x, y - z.y) < z.r)) continue;
+        if (near(x, y, step * 0.72).length) continue;
+        const z = Math.max(-1.2, Math.min(1.2, p.z * 0.5 + (r() - 0.5) * 1.4));
+        nodes.push({ x, y, z, d: p.d + len, dx: x - p.x, dy: y - p.y, parent: i });
+        links.push([i, nodes.length - 1]);
+        put(nodes.length - 1); queue.push(nodes.length - 1); placed = true;
+      }
+    }
+  }
+  // fire times: slow near the centre, faster outward, released in bursts ("waves")
+  const dMax = Math.max(...nodes.map((n) => n.d));
+  nodes.forEach((n, i) => {
+    if (i === 0) { n.fire = T.centreOn; return; }
+    let t = T.netStart + (T.netEnd - T.netStart) * Math.pow(n.d / dMax, 0.62);
+    t = t + (Math.ceil(t / T.waveEvery) * T.waveEvery - t) * 0.7 + r() * 0.06;
+    n.fire = Math.max(t, nodes[n.parent].fire + 0.12);
+  });
+  // a few cross-links make it a web rather than a tree
+  nodes.forEach((n, i) => {
+    if (i === 0 || r() > 0.32) return;
+    const step = 0.8 + Math.hypot(n.x, n.y) * 0.045;
+    const cand = near(n.x, n.y, step * 1.45).filter((j) => j !== i && j !== n.parent && nodes[j].parent !== i);
+    if (cand.length) { const j = cand[Math.floor(r() * cand.length)]; links.push(nodes[j].fire < n.fire ? [j, i] : [i, j]); }
+  });
+  const nodeList = nodes.map((n, i) => ({ x: n.x, y: n.y, z: n.z, fire: n.fire, size: i === 0 ? 0.62 : 0.2 + r() * 0.08 }));
+  const linkList = links.map(([a, b]) => ({ a: nodes[a], b: nodes[b], t0: nodes[a].fire, t1: nodes[b].fire }));
+  return { nodeList, linkList };
+}
+
+const net = { dim: { value: 1 } };
+
+// ---------------------------------------------------------------------
+// ENDING: "Central Bank, Terminal 7" (steps 3-7).
+// A second ending can be written as another function with the same shape
+// ({ clearZones, layout(aspect), update(t), reset() }) and chosen at ENDING below.
+// ---------------------------------------------------------------------
+function endingTerminal(ctx) {
+  const TIME = { dim0: 13.2, dim1: 16.5, branch0: 14.2, branch1: 20.4, termOn: 20.4, labelOn: 20.9, invite: 21.6, ready: 22.4 };
+  const POS = new THREE.Vector3(10, -5.6, 0);   // where the terminal sits in the network
+  const ICON = 2.1;                              // icon width, world units
+  const WARM = 0xffc874, WARM_HI = 0xfff1d0;
+  const branchDim = { value: 1 };
+  const group = new THREE.Group();
+
+  // the one branch that keeps going: a gently wandering chain from the centre to the terminal
+  const r = rng(SEED + 11), end = POS.clone().add(POS.clone().normalize().multiplyScalar(-ICON * 0.62));
+  const len = end.length(), steps = Math.ceil(len / 0.85), perp = new THREE.Vector2(-end.y, end.x).normalize();
+  const pts = []; let wob = 0;
+  for (let k = 0; k <= steps; k++) {
+    const f = k / steps; wob = wob * 0.6 + (r() - 0.5) * 1.1;
+    const off = (k === 0 || k === steps) ? 0 : wob * Math.sin(Math.PI * f);
+    pts.push({ x: end.x * f + perp.x * off, y: end.y * f + perp.y * off, z: 0.25,
+      fire: TIME.branch0 + (TIME.branch1 - TIME.branch0) * Math.pow(f, 0.85), size: 0.3 });
+  }
+  pts[0].size = 0.55;
+  const bLinks = pts.slice(1).map((p, k) => ({ a: pts[k], b: p, t0: pts[k].fire, t1: p.fire }));
+  group.add(makeLinks(bLinks, WARM, WARM_HI, 4.2, 1.0, branchDim));
+  group.add(makeNodes(pts, WARM, WARM_HI, branchDim));
+
+  // terminal icon: monitor outline with a prompt, drawn once to a canvas
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 440;
+  const c = cv.getContext('2d');
+  c.strokeStyle = '#fff'; c.fillStyle = '#fff'; c.lineJoin = 'round'; c.lineCap = 'round';
+  c.lineWidth = 16; c.beginPath(); if (c.roundRect) c.roundRect(28, 24, 456, 300, 28); else c.rect(28, 24, 456, 300); c.stroke();
+  c.globalAlpha = 0.1; c.fill(); c.globalAlpha = 1;
+  c.font = 'bold 150px ui-monospace, Menlo, Consolas, monospace'; c.textBaseline = 'middle'; c.fillText('>_', 92, 178);
+  c.lineWidth = 16; c.beginPath(); c.moveTo(256, 332); c.lineTo(256, 390); c.moveTo(150, 404); c.lineTo(362, 404); c.stroke();
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  const iconMat = new THREE.MeshBasicMaterial({ map: tex, color: WARM, transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
+  const icon = new THREE.Mesh(new THREE.PlaneGeometry(ICON, ICON * 440 / 512), iconMat);
+  icon.position.copy(POS);
+
+  const hc = document.createElement('canvas'); hc.width = hc.height = 128;
+  const h = hc.getContext('2d'), grd = h.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0, 'rgba(255,255,255,.9)'); grd.addColorStop(0.35, 'rgba(255,255,255,.28)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+  h.fillStyle = grd; h.fillRect(0, 0, 128, 128);
+  const haloMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(hc), color: 0xff9a3a, transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
+  const halo = new THREE.Mesh(new THREE.PlaneGeometry(ICON * 2.6, ICON * 2.6), haloMat);
+  halo.position.copy(POS);
+  group.add(halo, icon);
+  group.children.forEach((o, i) => { o.renderOrder = 10 + i; });
+  ctx.scene.add(group);
+
+  const focus = new THREE.Vector2(), v = new THREE.Vector3();
+  let ready = false;
+  const toScreen = (x, y) => { v.set(x, y, POS.z).project(ctx.camera); return [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight]; };
+
+  return {
+    clearZones: [{ x: POS.x, y: POS.y, r: ICON * 0.95 }],
+    focus,
+    // where the camera should end up so the terminal and its label sit well inside the frame
+    layout(aspect) {
+      const f = aspect < 1 ? 0.62 : 0.5;
+      focus.set(POS.x * f, POS.y * f);
+      const needX = (Math.abs(POS.x) * (1 - f) + ICON * 0.8) / 0.8, needY = (Math.abs(POS.y) * (1 - f) + ICON * 1.2) / 0.8;
+      return Math.max(needY, needX / aspect) / TAN;
+    },
+    update(t) {
+      ctx.net.dim.value = 1 - 0.4 * smooth(TIME.dim0, TIME.dim1, t);
+      const lit = smooth(TIME.termOn, TIME.termOn + 0.8, t), flash = t > TIME.termOn ? Math.exp(-(t - TIME.termOn) * 1.8) : 0;
+      const pulse = t > TIME.invite ? 0.5 - 0.5 * Math.cos((t - TIME.invite) * Math.PI * 2 / 2.4) : 0;
+      iconMat.opacity = lit * (0.82 + 0.18 * pulse + 0.6 * flash);
+      haloMat.opacity = lit * (0.22 + 0.3 * pulse + 0.5 * flash);
+      halo.scale.setScalar(1 + 0.14 * pulse);
+      // label under the icon, kept on screen
+      const la = smooth(TIME.labelOn, TIME.labelOn + 1, t);
+      ui.label.style.opacity = la;
+      if (la > 0) {
+        const [lx, ly] = toScreen(POS.x, POS.y - ICON * 0.5), w = ui.label.offsetWidth, m = 12;
+        const x = Math.min(innerWidth - w - m, Math.max(m, lx - w / 2));
+        ui.label.style.transform = `translate(${x}px, ${ly + innerHeight * 0.012}px)`;
+      }
+      // click target over icon + label
+      if (t >= TIME.invite) {
+        const [x0, y0] = toScreen(POS.x - ICON * 0.6, POS.y + ICON * 0.5), [x1, y1] = toScreen(POS.x + ICON * 0.6, POS.y - ICON * 0.5);
+        const lb = ui.label.getBoundingClientRect();
+        const L = Math.min(x0, lb.left) - 8, R = Math.max(x1, lb.right) + 8, B = lb.bottom + 8;
+        Object.assign(ui.hit.style, { left: L + 'px', top: (y0 - 8) + 'px', width: (R - L) + 'px', height: (B - y0 + 8) + 'px' });
+        ui.hit.classList.add('on');
+      }
+      if (!ready && t >= TIME.ready) { ready = true; ctx.onReady(); }
+    },
+    reset() { ready = false; ui.hit.classList.remove('on'); ui.label.style.opacity = 0; },
+  };
+}
+
+const ENDING = endingTerminal;
+
+// ---------------------------------------------------------------------
+// Assemble
+// ---------------------------------------------------------------------
+const ending = ENDING({ scene, camera, net, onReady: () => { if (ui.wrap.hidden) ui.replay.hidden = false; } });
+const built = growNetwork(ending.clearZones);
+const netLinks = makeLinks(built.linkList, 0x5aa9e6, 0xdff3ff, 2.4, 0.5, net.dim);
+const netNodes = makeNodes(built.nodeList, 0xa9dcff, 0xffffff, net.dim);
+netLinks.renderOrder = 0; netNodes.renderOrder = 1;   // the ending's objects draw on top (renderOrder 10+)
+scene.add(netLinks, netNodes);
+
+let zEnd = T.zEndMin;
+function resize() {
+  const w = innerWidth, h = innerHeight, px = Math.min(devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(px); renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  shared.uRes.value.set(w * px, h * px); shared.uPx.value = px;
+  shared.uScale.value = h * px / (2 * TAN);
+  // narrow screens pull back further so the network still reads as wide
+  zEnd = Math.max(T.zEndMin, T.minHalfWidth / (camera.aspect * TAN), ending.layout(camera.aspect));
+}
+addEventListener('resize', resize);
+resize();
+
+let time = 0, running = false, last = performance.now();
+function place(t) {
+  shared.uTime.value = t;
+  const z = T.zStart + (zEnd - T.zStart) * easeInOut(smooth(T.pullStart, T.pullEnd, t) ** 0.85);
+  const p = easeInOut(Math.min(1, Math.max(0, (t - 9) / (T.pullEnd - 9))));
+  camera.position.set(ending.focus.x * p, ending.focus.y * p, z);
+  camera.lookAt(ending.focus.x * p, ending.focus.y * p, 0);
+  camera.updateMatrixWorld();
+  ending.update(t);
+}
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (running) time += dt;
+  place(time);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+function start() {
+  time = 0; running = true; ending.reset(); closePanel(false);
+  ui.gate.hidden = true; ui.replay.hidden = true;
+}
+ui.play.addEventListener('click', start);
+ui.replay.addEventListener('click', start);
+
+// ---------------------------------------------------------------------
+// Message panel
+// ---------------------------------------------------------------------
+let typing = 0;
+const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+async function openPanel() {
+  const my = ++typing, alive = () => my === typing;
+  ui.wrap.hidden = false; ui.replay.hidden = true;
+  ui.screen.textContent = ''; ui.screen.classList.remove('resolved');
+  ui.close.focus();
+  const caret = document.createElement('span'); caret.className = 'caret';
+  await wait(450);
+  for (let i = 0; i < TEXT.message.length; i++) {
+    if (!alive()) return;
+    const line = TEXT.message[i], p = document.createElement('p'), span = document.createElement('span');
+    p.className = 'line' + (i === TEXT.message.length - 1 ? ' final' : '');
+    p.append(span, caret); ui.screen.appendChild(p);
+    let k = line.startsWith('> ') ? 2 : 0;
+    span.textContent = line.slice(0, k);
+    await wait(380);
+    for (; k < line.length; k++) {
+      if (!alive()) return;
+      span.textContent = line.slice(0, k + 1);
+      await wait(34 + Math.random() * 40 + (line[k] === ' ' ? 30 : 0));
+    }
+    await wait(i === TEXT.message.length - 1 ? 700 : 520);
+  }
+  if (alive()) ui.screen.classList.add('resolved');
+}
+function closePanel(refocus = true) {
+  typing++;
+  if (ui.wrap.hidden) return;
+  ui.wrap.hidden = true;
+  if (running && ui.hit.classList.contains('on')) ui.replay.hidden = false;
+  if (refocus) ui.hit.focus();
+}
+ui.hit.addEventListener('click', openPanel);
+ui.close.addEventListener('click', () => closePanel());
+addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+
+})();
+</script>
+</body>
+</html>
