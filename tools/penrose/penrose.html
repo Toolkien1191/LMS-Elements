@@ -12,9 +12,17 @@
     font: 600 max(16px, 2.6vh)/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   #stage { position: fixed; inset: 0; }
   #stage canvas { display: block; width: 100%; height: 100%; }
-  /* light that fills the screen as the camera enters the neuron */
-  #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0;
-    background: radial-gradient(circle at 50% 50%, #d9f7ff 0%, #4fc6ee 22%, #0d4868 55%, #02101c 100%); }
+  /* the monitor trace along the bottom edge */
+  #trace { position: fixed; left: 0; right: 0; bottom: 2.5vh; width: 100%; height: 9vh; pointer-events: none; opacity: 0; }
+  /* small labels that point at the neuron and the microtubules */
+  .label { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; white-space: nowrap;
+    font-size: max(20px, 3.8vh); letter-spacing: .06em; color: #eafaff;
+    text-shadow: 0 0 1.4vh rgba(95,216,255,.95), 0 0 .3vh #000; display: flex; align-items: center; gap: 1vh; }
+  .label::before { content: ""; width: 5vh; height: 2px; background: rgba(200,240,255,.8); box-shadow: 0 0 .8vh rgba(95,216,255,.9); }
+  /* light that fills the screen going into the axon, and the warm one coming back out */
+  #flash, #flash2 { position: fixed; inset: 0; pointer-events: none; opacity: 0; }
+  #flash { background: radial-gradient(circle at 50% 50%, #d9f7ff 0%, #4fc6ee 22%, #0d4868 55%, #02101c 100%); }
+  #flash2 { background: radial-gradient(circle at 50% 50%, #fffaf0 0%, #ffd98a 25%, #a8661c 60%, #1c0e02 100%); }
   /* black veil: dark first frame and the final fade */
   #veil { position: fixed; inset: 0; pointer-events: none; background: #000; opacity: 1; }
   #play { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2;
@@ -35,7 +43,11 @@
 </head>
 <body>
 <div id="stage"></div>
+<canvas id="trace"></canvas>
+<div class="label" id="lab-neuron"></div>
+<div class="label" id="lab-mt"></div>
 <div id="flash"></div>
+<div id="flash2"></div>
 <div id="veil"></div>
 <button id="play" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5v17l14-8.5z"/></svg><span></span></button>
 <button id="replay" type="button" hidden></button>
@@ -53,25 +65,30 @@ return {ACESFilmicToneMapping:et,AddEquation:y,AddOperation:J,AdditiveAnimationB
 // ON-SCREEN WORDING. Change the text here; nothing else needs touching.
 // ======================================================================
 const WORDS = {
-  play: 'Play',          // label under the large Play button
-  replay: 'Replay',      // small button shown after the scene ends
+  play: 'Play',                   // label under the large Play button
+  replay: 'Replay',               // small button shown after the scene ends
+  neuron: 'neuron',               // label beside the neuron (shot 2)
+  microtubules: 'microtubules',   // label inside the axon (shot 3)
 };
 // ======================================================================
 
 // ---- timeline (seconds after Play) ----
 const T = {
-  HEAD_IN: 1.6,     // silhouette glows up out of black
-  FLY: 3.6,         // camera starts moving in through the head
-  ARRIVE: 8.6,      // camera reaches the neuron; switch to the inside view
-  SLOW: 12.0,       // drifting microtubules start to slow down
-  SLOWED: 14.0,
-  ALIGN: 13.6,      // first tubule turns into line
-  ALIGN_GAP: 0.15,  // delay between one tubule and the next
-  ALIGN_DUR: 1.4,   // how long a single tubule takes to turn
-  ENDING: 20.6,     // the ending takes over from here
+  FLY: 2.8,          // camera starts moving in through the head
+  AT_NEURON: 6.5,    // the whole neuron is in view
+  NEURON_LABEL: 5.6, // 'neuron' label shows from here for LABEL_S seconds
+  INTO_AXON: 6.9,    // camera turns along the axon and goes inside
+  ARRIVE: 9.4,       // camera is inside the axon; switch to the inside view
+  MT_LABEL: 10.4,    // 'microtubules' label shows from here for LABEL_S seconds
+  LABEL_S: 2.0,
+  SYNC0: 12.2,       // the tubes' flickers start to fall into step...
+  SYNC1: 15.6,       // ...and are fully in step from here
+  PULSE: 1.15,       // seconds per shared pulse
+  SPIKE_AT: 9,       // the spike comes on this pulse after ARRIVE (about 3.5 shared pulses before it)
 };
-const ENDINGS = { glow: { duration: 7.4, run: endingGlow } };
-const ENDING = 'glow';
+T.ENDING = T.ARRIVE + T.SPIKE_AT * T.PULSE;   // the spike; the ending takes over from here
+const ENDINGS = { wake: { duration: 8.8, run: endingWake } };
+const ENDING = 'wake';
 const TOTAL = T.ENDING + ENDINGS[ENDING].duration;
 
 // ---- colours ----
@@ -82,12 +99,15 @@ const $ = s => document.querySelector(s);
 $('#play span').textContent = WORDS.play;
 $('#play').setAttribute('aria-label', WORDS.play);
 $('#replay').textContent = WORDS.replay;
+$('#lab-neuron').textContent = WORDS.neuron;
+$('#lab-mt').textContent = WORDS.microtubules;
 
 const clamp01 = x => Math.min(1, Math.max(0, x));
 const ramp = (t, a, b) => clamp01((t - a) / (b - a));
 const smooth = x => x * x * (3 - 2 * x);
 const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 const lerp = (a, b, k) => a + (b - a) * k;
+const fract = x => x - Math.floor(x);
 let seed = 7;
 const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 const rr = (a, b) => a + (b - a) * rnd();
@@ -97,7 +117,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setClearColor(0x000000, 1);
 $('#stage').appendChild(renderer.domElement);
-const camera = new THREE.PerspectiveCamera(40, 1, 0.005, 100);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.002, 100);
 
 function canvasTex(size, draw) {
   const c = document.createElement('canvas'); c.width = c.height = size;
@@ -113,9 +133,23 @@ const add = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlen
 function glowSprite(color, opacity = 1, map = dotTex) {
   return new THREE.Sprite(new THREE.SpriteMaterial({ map, color, opacity, ...add }));
 }
+// glowing edges (brighter where a surface turns away from the camera)
+function rimMaterial(color, extraUniforms = {}, vertexHead = '', vertexBody = '') {
+  return new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: color.clone() }, uOpacity: { value: 0 }, uFill: { value: .035 }, ...extraUniforms },
+    vertexShader: `varying vec3 vN; varying vec3 vV; varying float vY; ${vertexHead}
+      void main(){ vec3 p = position; vec3 n = normal; ${vertexBody}
+        vY = position.y; vec4 mv = modelViewMatrix * vec4(p,1.); vN = normalize(normalMatrix*n); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
+    fragmentShader: `uniform vec3 uColor; uniform float uOpacity, uFill; varying vec3 vN; varying vec3 vV; varying float vY;
+      void main(){ float f = 1. - abs(dot(normalize(vN), normalize(vV))); float g = pow(f, 2.6)*1.25 + uFill;
+        g *= smoothstep(-3.3, -2.3, vY);   // the body dissolves downwards, so no bottom edge shows on tall screens
+        gl_FragColor = vec4(uColor*g*uOpacity, 1.); }`,
+    side: THREE.DoubleSide, ...add,
+  });
+}
 
 // ======================================================================
-// PART 1: the silhouette and the neurons inside the head
+// PART 1: the person, and the neuron inside the head
 // ======================================================================
 const headScene = new THREE.Scene();
 
@@ -124,24 +158,20 @@ const PROFILE = [[0, -3.6], [2.1, -3.6], [2.05, -2.4], [2.0, -1.9], [1.75, -1.45
   [0.41, -0.62], [0.5, -0.42], [0.66, -0.12], [0.76, 0.2], [0.8, 0.52], [0.75, 0.86], [0.6, 1.14], [0.36, 1.32], [0.001, 1.4]];
 const outline = new THREE.SplineCurve(PROFILE.map(([r, y]) => new THREE.Vector2(r, y))).getPoints(90);   // smooth the corners
 const lathe = new THREE.LatheGeometry(outline, 72);
+const flatten = y => lerp(1.08, 0.42, smooth(ramp(y, -0.95, -1.3)));   // head round, shoulders flat
 {
   const p = lathe.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const y = p.getY(i), k = smooth(ramp(y, -0.95, -1.3));   // 0 on the head, 1 on the shoulders
-    p.setZ(i, p.getZ(i) * lerp(1.08, 0.42, k));
-  }
+  for (let i = 0; i < p.count; i++) p.setZ(i, p.getZ(i) * flatten(p.getY(i)));
   lathe.computeVertexNormals();
 }
-const rimMat = new THREE.ShaderMaterial({
-  uniforms: { uColor: { value: CYAN.clone() }, uOpacity: { value: 0 } },
-  vertexShader: `varying vec3 vN; varying vec3 vV; varying float vY;
-    void main(){ vY = position.y; vec4 mv = modelViewMatrix * vec4(position,1.); vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
-  fragmentShader: `uniform vec3 uColor; uniform float uOpacity; varying vec3 vN; varying vec3 vV; varying float vY;
-    void main(){ float f = 1. - abs(dot(normalize(vN), normalize(vV))); float g = pow(f, 2.6)*1.25 + .035;
-      g *= smoothstep(-3.3, -2.3, vY);   // the body dissolves downwards, so no bottom edge shows on tall screens
-      gl_FragColor = vec4(uColor*g*uOpacity, 1.); }`,
-  side: THREE.DoubleSide, ...add,
-});
+// the head bows forward from the neck (unconscious) and lifts again on waking
+const PIVOT = new THREE.Vector3(0, -0.95, 0);
+const BOW = 0.38, LIFTED = -0.05;
+const neckWeight = y => smooth(ramp(y, -1.15, -0.7));
+const rimMat = rimMaterial(CYAN, { uBow: { value: BOW } },
+  `uniform float uBow;
+   vec3 bow(vec3 v, float a){ float c = cos(a), s = sin(a); return vec3(v.x, v.y*c - v.z*s, v.y*s + v.z*c); }`,
+  `float a = uBow * smoothstep(-1.15, -.7, p.y); p = bow(p - vec3(0., -.95, 0.), a) + vec3(0., -.95, 0.); n = bow(n, a);`);
 const silhouette = new THREE.Mesh(lathe, rimMat);
 headScene.add(silhouette);
 
@@ -153,22 +183,41 @@ function profileAt(y) {
   }
   return 0;
 }
-const skinPts = [], skinCol = [];
+const skinBase = [], skinCol = [];
 for (let i = 0; i < 1600; i++) {
   const y = rr(-3.2, 1.38), a = rr(0, Math.PI * 2), r = profileAt(y);
-  const k = smooth(ramp(y, -0.95, -1.3));
-  skinPts.push(Math.cos(a) * r, y, Math.sin(a) * r * lerp(1.08, 0.42, k));
+  skinBase.push(Math.cos(a) * r, y, Math.sin(a) * r * flatten(y));
   const c = smooth(ramp(y, -3.2, -2.3)); skinCol.push(c, c, c);
 }
 const skinGeo = new THREE.BufferGeometry();
-skinGeo.setAttribute('position', new THREE.Float32BufferAttribute(skinPts, 3));
+skinGeo.setAttribute('position', new THREE.Float32BufferAttribute(skinBase, 3));
 skinGeo.setAttribute('color', new THREE.Float32BufferAttribute(skinCol, 3));
 const skinMat = new THREE.PointsMaterial({ map: dotTex, color: 0x9fe8ff, vertexColors: true, size: 0.035, opacity: 0, ...add });
 headScene.add(new THREE.Points(skinGeo, skinMat));
 
-// neurons inside the head; the one at TARGET is where the camera goes
-const TARGET = new THREE.Vector3(0.16, 0.56, 0.12);
-const neuronSegs = [], somas = [];
+// everything inside the head turns with it about the neck
+const headGroup = new THREE.Group(), headInner = new THREE.Group();
+headGroup.position.copy(PIVOT); headInner.position.copy(PIVOT).negate();
+headGroup.add(headInner); headScene.add(headGroup);
+
+let bowNow = null;
+function setBow(a) {
+  if (a === bowNow) return;
+  bowNow = a;
+  rimMat.uniforms.uBow.value = a;
+  headGroup.rotation.x = a;
+  const p = skinGeo.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = skinBase[i * 3], y = skinBase[i * 3 + 1] - PIVOT.y, z = skinBase[i * 3 + 2];
+    const b = a * neckWeight(skinBase[i * 3 + 1]), c = Math.cos(b), s = Math.sin(b);
+    p.setXYZ(i, x, y * c - z * s + PIVOT.y, y * s + z * c);
+  }
+  p.needsUpdate = true;
+  headScene.updateMatrixWorld();
+}
+
+// background neurons: thin branching lines and glowing cell bodies
+const SOMA = new THREE.Vector3(0.16, 0.6, 0.12);      // the neuron the camera visits
 function branch(from, dir, len, depth, out) {
   const to = from.clone().addScaledVector(dir, len);
   out.push(from.x, from.y, from.z, to.x, to.y, to.z);
@@ -179,24 +228,60 @@ function branch(from, dir, len, depth, out) {
     branch(to, d, len * rr(.55, .8), depth - 1, out);
   }
 }
-for (let i = 0; i < 22; i++) {
-  const c = i === 0 ? TARGET.clone() : new THREE.Vector3(rr(-.5, .5), rr(0.05, 1.05), rr(-.45, .45));
-  if (i && c.distanceTo(TARGET) < 0.18) c.x += 0.3;
+const neuronSegs = [], somas = [];
+while (somas.length < 20) {
+  const c = new THREE.Vector3(rr(-.52, .52), rr(0.05, 1.05), rr(-.45, .45));
+  if (c.distanceTo(SOMA) < 0.32 || c.distanceTo(new THREE.Vector3(0.05, 0.25, 0.02)) < 0.22) continue;   // keep clear of the visited neuron
   somas.push(c);
-  const n = i === 0 ? 6 : 4;
-  for (let k = 0; k < n; k++) {
-    const d = new THREE.Vector3(rr(-1, 1), rr(-1, 1), rr(-1, 1)).normalize();
-    branch(c, d, i === 0 ? 0.11 : 0.09, 2, neuronSegs);
-  }
+  for (let k = 0; k < 4; k++) branch(c, new THREE.Vector3(rr(-1, 1), rr(-1, 1), rr(-1, 1)).normalize(), 0.09, 2, neuronSegs);
 }
 const nGeo = new THREE.BufferGeometry();
 nGeo.setAttribute('position', new THREE.Float32BufferAttribute(neuronSegs, 3));
 const nMat = new THREE.LineBasicMaterial({ color: 0x55c8ff, opacity: 0, ...add });
-headScene.add(new THREE.LineSegments(nGeo, nMat));
-const somaSprites = somas.map((p, i) => {
-  const s = glowSprite(i === 0 ? 0xbff2ff : 0x6fd4ff, 0);
-  s.position.copy(p); s.scale.setScalar(i === 0 ? 0.09 : 0.06); headScene.add(s); return s;
+headInner.add(new THREE.LineSegments(nGeo, nMat));
+const somaSprites = somas.map(p => {
+  const s = glowSprite(0x6fd4ff, 0); s.position.copy(p); s.scale.setScalar(0.06); headInner.add(s); return s;
 });
+
+// THE neuron: cell body, tapering dendrites (one long apical dendrite upwards), one long axon
+const cellMat = rimMaterial(CYAN);
+cellMat.uniforms.uFill.value = 0.12;
+const neuron = new THREE.Group();
+headInner.add(neuron);
+const soma = new THREE.Mesh(new THREE.SphereGeometry(0.026, 20, 14), cellMat);
+soma.position.copy(SOMA); soma.scale.set(1, 1.3, 1); neuron.add(soma);
+const somaGlow = glowSprite(0xbff2ff, 0); somaGlow.position.copy(SOMA); somaGlow.scale.setScalar(0.12); neuron.add(somaGlow);
+function dendrite(from, dir, len, radius, depth) {
+  const mid = from.clone().addScaledVector(dir, len * .5).add(new THREE.Vector3(rr(-1, 1), rr(-1, 1), rr(-1, 1)).multiplyScalar(len * .12));
+  const to = from.clone().addScaledVector(dir, len);
+  neuron.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([from, mid, to]), 8, radius, 5), cellMat));
+  if (depth <= 0) return;
+  for (let i = 0; i < 2; i++) {
+    const d = dir.clone().add(new THREE.Vector3(rr(-.8, .8), rr(-.8, .8), rr(-.8, .8))).normalize();
+    dendrite(to, d, len * rr(.55, .75), radius * .7, depth - 1);
+  }
+}
+dendrite(SOMA.clone().add({ x: 0, y: .03, z: 0 }), new THREE.Vector3(.1, 1, .05).normalize(), 0.16, 0.0045, 3);   // apical
+for (let i = 0; i < 5; i++) {
+  const a = i / 5 * Math.PI * 2 + rr(-.3, .3);
+  const d = new THREE.Vector3(Math.cos(a), rr(-.5, .25), Math.sin(a)).normalize();
+  dendrite(SOMA.clone().addScaledVector(d, .02), d, rr(.08, .12), 0.0035, 2);
+}
+const axonCurve = new THREE.CatmullRomCurve3([
+  SOMA.clone().add({ x: 0, y: -0.03, z: 0 }), new THREE.Vector3(0.14, 0.48, 0.13), new THREE.Vector3(0.09, 0.33, 0.1),
+  new THREE.Vector3(0.05, 0.18, 0.03), new THREE.Vector3(0.0, 0.04, -0.03), new THREE.Vector3(-0.08, -0.08, -0.06),
+]);
+neuron.add(new THREE.Mesh(new THREE.TubeGeometry(axonCurve, 90, 0.0055, 8), cellMat));
+{ // axon terminals: a few short twigs with small glowing ends
+  const end = axonCurve.getPoint(1), dir = axonCurve.getTangent(1);
+  for (let i = 0; i < 4; i++) {
+    const d = dir.clone().add(new THREE.Vector3(rr(-.9, .9), rr(-.6, .6), rr(-.9, .9))).normalize();
+    const to = end.clone().addScaledVector(d, rr(.04, .07));
+    neuron.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.LineCurve3(end, to), 2, 0.0025, 5), cellMat));
+    const b = glowSprite(0x9fe8ff, 0); b.position.copy(to); b.scale.setScalar(0.02); neuron.add(b);
+  }
+}
+const neuronLights = neuron.children.filter(c => c.isSprite);
 
 // faint far dust so the black is not empty
 function dustField(n, spread, color, size) {
@@ -207,140 +292,166 @@ function dustField(n, spread, color, size) {
 }
 const headDust = dustField(260, 12, 0x3d7fa8, 0.06);
 headScene.add(headDust);
+const aura = glowSprite(0x4fc6ee, 0); aura.position.set(0, 0.35, -0.6); aura.scale.setScalar(4.2); headScene.add(aura);
 
-const CAM0 = new THREE.Vector3(0, -0.3, 7.4), LOOK0 = new THREE.Vector3(0, -0.6, 0);
-const v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
+// ---- camera path through the head: k = 0 outside, 1 looking at the neuron, 2 inside the axon ----
+const CAM0 = new THREE.Vector3(1.7, 0.0, 7.0), LOOK0 = new THREE.Vector3(0, -0.55, 0);
+const NEURON_C = new THREE.Vector3(0.1, 0.27, 0.06);     // middle of the neuron, cell body plus upper axon
+const VIEW1 = NEURON_C.clone().add({ x: 0.2, y: 0.12, z: 1.35 });
+const intoAxon = new THREE.CatmullRomCurve3([
+  VIEW1, axonCurve.getPoint(0.12).add({ x: 0.06, y: 0.03, z: 0.16 }),
+  axonCurve.getPoint(0.3).add({ x: 0.01, y: 0.015, z: 0.03 }), axonCurve.getPoint(0.5),
+]);
+const w = v => headInner.localToWorld(v);     // head-space point -> world
+const lookV = new THREE.Vector3();
+function camPose(t, k) {
+  if (k <= 1) {
+    const start = CAM0.clone().setZ(CAM0.z - 0.25 * smooth(ramp(t, 0, T.FLY)));
+    camera.position.lerpVectors(start, w(VIEW1.clone()), k);
+    camera.position.y += Math.sin(k * Math.PI) * 0.15;       // a slight arc, not a straight line
+    lookV.lerpVectors(LOOK0, w(NEURON_C.clone()), smooth(ramp(k, 0, 0.7)));
+  } else {
+    const b = k - 1;
+    camera.position.copy(w(intoAxon.getPoint(b)));
+    lookV.lerpVectors(w(NEURON_C.clone()), w(axonCurve.getPoint(lerp(0.35, 0.95, b))), smooth(ramp(b, 0, 0.45)));
+  }
+  camera.lookAt(lookV);
+}
 
-function updateHead(t) {
-  const on = smooth(ramp(t, 0.15, T.HEAD_IN));
-  const u = ease(ramp(t, T.FLY, T.ARRIVE));
-  // gentle drift before the fly-in, then in through the forehead to the neuron
-  const camStart = v1.copy(CAM0).setZ(CAM0.z - 0.25 * smooth(ramp(t, 0, T.FLY)));
-  const end = v2.copy(TARGET).add({ x: 0, y: 0, z: 0.035 });
-  camera.position.lerpVectors(camStart, end, u);
-  camera.position.x += Math.sin(u * Math.PI) * 0.35;      // slight curve so the move feels hand-held, not linear
-  camera.position.y += Math.sin(u * Math.PI) * 0.12;
-  const look = new THREE.Vector3().lerpVectors(LOOK0, TARGET, smooth(ramp(u, 0, 0.6)));
-  camera.lookAt(look);
+// k: camera position on the path; wake: 0 unconscious .. 1 awake; echo: gold afterglow of the spike in the neuron
+function updateHead(t, k, wake, bow, echo) {
+  setBow(bow);
+  camPose(t, k);
+  const on = smooth(ramp(t, 0.1, 1.2));
+  const inside = smooth(ramp(k, 0.72, 0.98));                         // camera has passed through the surface
+  const slow = Math.pow(0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 3.4 - 1.5), 2);   // the slow, faint pulse while unconscious
+  rimMat.uniforms.uOpacity.value = on * lerp(0.2 + 0.06 * slow, 1, wake) * (1 - inside);
+  rimMat.uniforms.uFill.value = lerp(0.035, 0.085, wake);
+  skinMat.opacity = on * lerp(0.1, 0.6, wake) * (1 - inside);
+  headDust.material.opacity = on * 0.5;
+  aura.material.opacity = on * wake * 0.22;
 
-  const inside = smooth(ramp(u, 0.55, 0.78));                  // camera has passed through the surface
-  const breath = 1 + 0.012 * Math.sin(t * 1.3);
-  silhouette.scale.set(1, breath, 1);
-  rimMat.uniforms.uOpacity.value = on * (1 - inside);
-  skinMat.opacity = on * 0.55 * (1 - inside);
-  headDust.material.opacity = on * 0.6;
-  const inner = on * lerp(0.35, 1, smooth(ramp(u, 0.2, 0.7)));
-  nMat.opacity = inner * 0.7;
+  const near = smooth(ramp(k, 0.15, 0.8));                            // neurons light up as the camera approaches
+  const level = on * lerp(0.1 + 0.25 * slow, 0.8, Math.max(near, wake));
+  nMat.opacity = level * 0.75;
   somaSprites.forEach((s, i) => {
-    const tw = 0.75 + 0.25 * Math.sin(t * 2.1 + i * 1.7);
-    s.material.opacity = inner * (i === 0 ? 1 : tw * (1 - 0.6 * smooth(ramp(u, 0.85, 1))));
+    const tw = wake > 0 ? lerp(1, 0.55 + 0.45 * Math.sin(t * 5.3 + i * 1.7), wake) : 1;   // awake: lively twinkle
+    s.material.opacity = level * tw;
   });
-  somaSprites[0].scale.setScalar(0.09 + 0.05 * Math.sin(t * 3) * smooth(ramp(u, 0.4, 0.9)));
+  const focus = Math.max(level, on * smooth(ramp(k, 0.3, 0.9)));
+  const shown = focus * (1 - smooth(ramp(k, 1.4, 1.75)));            // hide the neuron once we are inside its axon
+  cellMat.uniforms.uOpacity.value = shown * 1.15;
+  cellMat.uniforms.uColor.value.copy(CYAN).lerp(GOLD, echo);
+  neuronLights.forEach(s => { s.material.opacity = shown; s.material.color.set(0xbff2ff).lerp(GOLD, echo); });
+  somaGlow.scale.setScalar(0.12 + 0.1 * echo);
+}
+
+function headFly(t) {
+  const k = ease(ramp(t, T.FLY, T.AT_NEURON)) + ease(ramp(t, T.INTO_AXON, T.ARRIVE));
+  updateHead(t, k, 0, BOW, 0);
 }
 
 // ======================================================================
-// PART 2: inside the neuron, the microtubules
+// PART 2: inside the axon. Microtubules run lengthwise in a loose bundle.
 // ======================================================================
 const cellScene = new THREE.Scene();
-const N_TUBES = 36, TUBE_R = 0.085;
-const AXIS_DIR = new THREE.Vector3(1, 0, 0);     // the aligned tubules lie along x
-const tubeMat = new THREE.ShaderMaterial({
-  uniforms: { uOpacity: { value: 0 }, uSpark: { value: -99 }, uLit: { value: 0 }, uAfter: { value: 0 },
-    uCyan: { value: CYAN.clone() }, uGold: { value: GOLD.clone() } },
-  vertexShader: `varying vec3 vN; varying vec3 vV; varying vec2 vUv; varying float vS;
-    void main(){ vUv = uv; vec4 w = modelMatrix*vec4(position,1.); vS = w.x;
-      vec4 mv = viewMatrix*w; vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
-  fragmentShader: `uniform float uOpacity, uSpark, uLit, uAfter; uniform vec3 uCyan, uGold;
-    varying vec3 vN; varying vec3 vV; varying vec2 vUv; varying float vS;
-    void main(){
-      float f = 1. - abs(dot(normalize(vN), normalize(vV)));
-      float rim = pow(f, 1.6);
-      // 13 protofilaments along the length, with faint tubulin bands
-      float pf = smoothstep(.32, .5, abs(fract(vUv.x*13.) - .5));
-      float band = .82 + .18*smoothstep(.2, .5, abs(fract(vUv.y*34. + vUv.x*3.) - .5));
-      vec3 col = uCyan * (.14 + .9*rim) * (.55 + .45*pf) * band;
-      // the spark's light passing along the tubule, and the warm afterglow it leaves
-      float d = vS - uSpark;
-      float head = exp(-d*d*9.) * uLit;
-      float trail = smoothstep(.2, -2.2, d) * smoothstep(-6., -1.5, d) * uLit;
-      col += uGold * (head*2.2 + trail*.35) * (.4 + .6*rim) + uGold * uAfter * (.25 + .9*rim);
-      gl_FragColor = vec4(col*uOpacity, 1.);
-    }`,
-  side: THREE.DoubleSide, ...add,
+const AXON_R = 4.2;           // the axon's own membrane around the bundle
+const TUBE_R = 0.11;
+const X0 = -3.0;              // where along the bundle the shared pulse (and the spark) set off
+const LAMBDA = 14;            // length of one shared pulse along the bundle (long: the whole bundle lights almost together)
+const tubeShared = {
+  uOpacity: { value: 0 }, uSync: { value: 0 }, uActivity: { value: 0 },
+  uSpark: { value: -99 }, uLit: { value: 0 }, uAfter: { value: 0 },
+  uCyan: { value: CYAN.clone() }, uGold: { value: GOLD.clone() },
+};
+const tubeVert = `varying vec3 vN; varying vec3 vV; varying vec2 vUv; varying float vS;
+  void main(){ vUv = uv; vec4 w = modelMatrix*vec4(position,1.); vS = w.x;
+    vec4 mv = viewMatrix*w; vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`;
+const tubeFrag = `uniform float uOpacity, uSync, uActivity, uSpark, uLit, uAfter, uPhase, uAmp; uniform vec3 uCyan, uGold;
+  varying vec3 vN; varying vec3 vV; varying vec2 vUv; varying float vS;
+  void main(){
+    float f = 1. - abs(dot(normalize(vN), normalize(vV)));
+    float rim = pow(f, 1.5);
+    // rings of tubulin units stacked along the tube (fade the rings out where they would get too fine to draw)
+    float r = vS * 15.;
+    float ringW = fwidth(r);
+    float ring = mix(smoothstep(.0, .2, abs(fract(r) - .5)), .8, smoothstep(.25, .6, ringW));
+    float seg = .55 + .45*ring;
+    float pf = .82 + .18*smoothstep(.3, .5, abs(fract(vUv.x*13.) - .5));   // 13 protofilaments
+    vec3 col = uCyan * (.05 + .42*rim) * seg * pf;
+    // activity: own flicker when out of step; one pulse travelling along the bundle when in step
+    float ph = uPhase - uSync*(vS - ${X0.toFixed(2)})/${LAMBDA.toFixed(2)};
+    float g = exp(-fract(ph)*4.5) * uAmp * uActivity;
+    col += mix(uCyan, vec3(1.), .45) * g * (.3 + 1.2*rim) * seg;
+    // the spike passing along, the warm trail it leaves, and the bloom
+    float d = vS - uSpark;
+    float head = exp(-d*d*9.) * uLit;
+    float trail = smoothstep(.2, -2.2, d) * smoothstep(-6., -1.5, d) * uLit;
+    col += uGold * (head*1.4 + trail*.22) * (.4 + .6*rim) + uGold * uAfter * (.25 + .9*rim);
+    gl_FragColor = vec4(col*uOpacity, 1.);
+  }`;
+
+// lay out the tracks in the axon's cross-section; each track has one or two tubes with staggered, open ends
+const tracks = [new THREE.Vector2(0, 0)];
+while (tracks.length < 18) {
+  const a = rr(0, Math.PI * 2), r = Math.sqrt(rnd()) * 1.05, p = new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r);
+  if (tracks.every(q => q.distanceTo(p) > 0.33)) tracks.push(p);
+}
+const tubes = [];
+function addTube(p, x0, len) {
+  const mat = new THREE.ShaderMaterial({ uniforms: { ...tubeShared, uPhase: { value: 0 }, uAmp: { value: 0 } },
+    vertexShader: tubeVert, fragmentShader: tubeFrag, side: THREE.DoubleSide, ...add });
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(TUBE_R, TUBE_R, len, 18, 1, true), mat);
+  m.rotation.set(rr(-.015, .015), rr(-.015, .015), -Math.PI / 2 + rr(-.012, .012));   // loosely, not perfectly, parallel
+  m.position.set(x0 + len / 2, p.x, p.y);
+  cellScene.add(m);
+  tubes.push({ mat, off: rnd(), rate: rr(-.35, .35), w1: rr(1.2, 2.6), q1: rr(0, 6.3), w2: rr(2.5, 4.5), q2: rr(0, 6.3),
+    w3: rr(1.5, 3.5), q3: rr(0, 6.3) });
+}
+tracks.forEach((p, i) => {
+  if (i === 0) { addTube(p, -16, 32); return; }       // the centre track is unbroken: the spark runs along it
+  let x = rr(-15, -3.5);
+  while (x < 14) { const len = rr(7, 13); addTube(p, x, len); x += len + rr(0.5, 1.4); }
 });
 
-const SLOTS = [];
-for (let r = 0; r < 6; r++) for (let c = 0; c < 6; c++)
-  SLOTS.push(new THREE.Vector3(rr(-.12, .12), (r - 2.5) * 0.3, (c - 2.5) * 0.34 + (r % 2 ? 0.085 : -0.085)));
-const ALIGNED_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2);
-const ALIGNED_Q2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
-const order = [...Array(N_TUBES).keys()].sort(() => rnd() - .5);
-const tubes = [];
-for (let i = 0; i < N_TUBES; i++) {
-  const len = rr(2.6, 3.2);
-  const g = new THREE.CylinderGeometry(TUBE_R, TUBE_R, len, 14, 1, true);
-  const m = new THREE.Mesh(g, tubeMat);
-  cellScene.add(m);
-  tubes.push({
-    mesh: m, p0: new THREE.Vector3(rr(-3.6, 3.6), rr(-2.1, 2.1), rr(-2.4, 1.6)),
-    vel: new THREE.Vector3(rr(-.25, .25), rr(-.18, .18), rr(-.15, .15)),
-    q0: new THREE.Quaternion().setFromEuler(new THREE.Euler(rr(0, 6.3), rr(0, 6.3), rr(0, 6.3))),
-    spinAxis: new THREE.Vector3(rr(-1, 1), rr(-1, 1), rr(-1, 1)).normalize(), spin: rr(0.5, 1.1) * (rnd() < .5 ? -1 : 1),
-    slot: SLOTS[i], tAlign: T.ALIGN + order[i] * T.ALIGN_GAP, wob: rr(0, 6.3),
-  });
-}
-
-// cytoplasm: drifting specks and a few large soft shapes for depth
-const cellDust = dustField(700, 9, 0x4aa6d6, 0.045);
-cellDust.geometry.attributes.position.array.forEach((_, i, a) => { if (i % 3 === 2) a[i] = rr(-7, 4); });
+// the axon's membrane around us, and drifting specks in the axoplasm
+const membrane = new THREE.Mesh(new THREE.CylinderGeometry(AXON_R, AXON_R, 40, 40, 1, true), rimMaterial(CYAN));
+membrane.rotation.z = Math.PI / 2;
+membrane.material.uniforms.uFill.value = 0.0;
+membrane.material.uniforms.uColor.value.set('#2d7fb0');
+cellScene.add(membrane);
+const plasma = [];
+for (let i = 0; i < 700; i++) { const a = rr(0, 6.3), r = Math.sqrt(rnd()) * (AXON_R - .2); plasma.push(rr(-16, 16), Math.cos(a) * r, Math.sin(a) * r); }
+const plasmaGeo = new THREE.BufferGeometry(); plasmaGeo.setAttribute('position', new THREE.Float32BufferAttribute(plasma, 3));
+const cellDust = new THREE.Points(plasmaGeo, new THREE.PointsMaterial({ map: dotTex, color: 0x4aa6d6, size: 0.04, opacity: 0, ...add }));
 cellScene.add(cellDust);
-const blobs = [];
-for (let i = 0; i < 7; i++) {
-  const b = glowSprite(i % 2 ? 0x1b5d8a : 0x16496e, 0);
-  b.position.set(rr(-6, 6), rr(-3.5, 3.5), rr(-9, -5)); b.scale.setScalar(rr(3, 6)); b.userData.o = rr(.25, .45);
-  cellScene.add(b); blobs.push(b);
-}
 
-// how far each tubule has tumbled: full speed, then slowing down
-function phase(t) {
-  const a = T.ARRIVE - 1, s0 = T.SLOW, s1 = T.SLOWED, lo = 0.15;
-  if (t < s0) return t - a;
-  const k = Math.min(t, s1) - s0, span = s1 - s0;
-  let p = (s0 - a) + k - (1 - lo) * k * k / (2 * span);
-  if (t > s1) p += (t - s1) * lo;
-  return p;
-}
+const syncAmount = t => smooth(ramp(t, T.SYNC0, T.SYNC1));
+const CELL_CAM = new THREE.Vector3(-4.3, 1.5, 3.1), CELL_LOOK = new THREE.Vector3(0.6, -0.15, 0);
+const MT_ANCHOR = new THREE.Vector3(-1.2, 1.25, 0.2);     // where the 'microtubules' label points
+const camIn = new THREE.Vector3(-12, 0.2, 0.25);
+function updateCell(t, look = CELL_LOOK, activity = 1) {
+  // arrive travelling along the axon, then settle beside the bundle and drift slowly
+  const a = ease(ramp(t, T.ARRIVE, T.ARRIVE + 2.2));
+  camera.position.lerpVectors(camIn, CELL_CAM, a);
+  camera.position.x += 0.35 * ramp(t, T.ARRIVE, TOTAL);
+  const lk = new THREE.Vector3().lerpVectors(camera.position.clone().add({ x: 4, y: 0, z: 0 }), look, smooth(ramp(t, T.ARRIVE + .3, T.ARRIVE + 2.2)));
+  camera.lookAt(lk);
 
-const CELL_CAM = new THREE.Vector3(-3.0, 1.5, 6.6), CELL_LOOK = new THREE.Vector3(0.15, 0, 0);
-const qd = new THREE.Quaternion(), qa = new THREE.Quaternion(), qs = new THREE.Quaternion(), pd = new THREE.Vector3();
-function updateCell(t, look = CELL_LOOK) {
   const arrive = smooth(ramp(t, T.ARRIVE - 0.2, T.ARRIVE + 0.9));
-  // gentle settling move of the camera, slowly circling a little
-  const s = smooth(ramp(t, T.ARRIVE, TOTAL));
-  camera.position.set(lerp(CELL_CAM.x, -1.2, s), lerp(CELL_CAM.y, 1.0, s), lerp(CELL_CAM.z + 1.4, CELL_CAM.z - 0.9, smooth(ramp(t, T.ARRIVE - .5, T.ENDING))));
-  camera.lookAt(look);
-
-  const ph = phase(t);
+  tubeShared.uOpacity.value = arrive;
+  tubeShared.uActivity.value = activity * smooth(ramp(t, T.ARRIVE + 0.4, T.ARRIVE + 2));
+  const m = syncAmount(t);
+  tubeShared.uSync.value = m;
+  const base = (t - T.ARRIVE) / T.PULSE;
   for (const tb of tubes) {
-    pd.copy(tb.p0).addScaledVector(tb.vel, ph);
-    pd.y += Math.sin(ph * .7 + tb.wob) * 0.12;
-    qd.setFromAxisAngle(tb.spinAxis, ph * tb.spin).premultiply(tb.q0);
-    const k = ease(ramp(t, tb.tAlign, tb.tAlign + T.ALIGN_DUR));
-    if (k > 0) {
-      qs.copy(Math.abs(qd.dot(ALIGNED_Q)) >= Math.abs(qd.dot(ALIGNED_Q2)) ? ALIGNED_Q : ALIGNED_Q2);
-      qa.slerpQuaternions(qd, qs, k);
-      tb.mesh.quaternion.copy(qa);
-      tb.mesh.position.lerpVectors(pd, tb.slot, k);
-      tb.mesh.position.y += Math.sin(t * 1.1 + tb.wob) * 0.012 * k;   // aligned, but still alive
-    } else {
-      tb.mesh.quaternion.copy(qd);
-      tb.mesh.position.copy(pd);
-    }
+    const own = tb.off + (t - T.ARRIVE) * tb.rate + 0.3 * Math.sin(t * tb.w1 + tb.q1) + 0.15 * Math.sin(t * tb.w2 + tb.q2);
+    tb.mat.uniforms.uPhase.value = base + (1 - m) * own;
+    tb.mat.uniforms.uAmp.value = lerp(0.3 + 0.7 * Math.pow(0.5 + 0.5 * Math.sin(t * tb.w3 + tb.q3), 2), 1, m);
   }
-  tubeMat.uniforms.uOpacity.value = arrive;
-  cellDust.material.opacity = arrive * 0.55;
-  cellDust.rotation.y = t * 0.01;
-  blobs.forEach(b => b.material.opacity = arrive * b.userData.o);
+  membrane.material.uniforms.uOpacity.value = arrive * 0.35;
+  cellDust.material.opacity = arrive * 0.5;
+  cellDust.position.x = -0.12 * t;
 }
 
 // ======================================================================
@@ -400,43 +511,84 @@ const wash = glowSprite(0xffcf7a, 0, spark.group.children[0].material.map);   //
 cellScene.add(wash);
 
 // ======================================================================
-// ENDING "glow": the spark runs along the aligned tubules and blooms,
-// holds, then everything fades to dark.  te = seconds since T.ENDING.
+// THE TRACE along the bottom edge, like a monitor. Ragged noise while the
+// tubes are out of step, a small steady rhythm once in step, one sharp
+// spike at T.ENDING, then a calm regular rhythm.
+// ======================================================================
+const traceCanvas = $('#trace'), tg = traceCanvas.getContext('2d');
+const hash = n => fract(Math.sin(n * 127.1) * 43758.5453) * 2 - 1;
+const vnoise = x => { const i = Math.floor(x), f = x - i; return lerp(hash(i), hash(i + 1), smooth(f)); };
+function traceValue(x) {
+  const m = syncAmount(x);
+  const ragged = (vnoise(x * 14) * 0.65 + vnoise(x * 37 + 7) * 0.35) * 0.32;
+  const beat = (Math.exp(-fract((x - T.ARRIVE) / T.PULSE) * 7) - 0.15) * 0.28;
+  const ds = x - T.ENDING;
+  const spike = Math.exp(-Math.pow(ds / 0.028, 2)) - 0.32 * Math.exp(-Math.pow((ds - 0.075) / 0.035, 2));
+  const calm = 0.13 * Math.sin(ds * Math.PI * 2 / 1.5);
+  return lerp(lerp(ragged, beat, m), calm, smooth(ramp(ds, 0.12, 0.9))) + (Math.abs(ds) < 0.4 ? spike : 0);
+}
+const TRACE_SPAN = 5;       // seconds shown across the width
+function drawTrace(t, alpha) {
+  traceCanvas.style.opacity = alpha.toFixed(3);
+  if (alpha <= 0) return;
+  const W = traceCanvas.width, H = traceCanvas.height, mid = H * 0.6, amp = H * 0.5;
+  tg.clearRect(0, 0, W, H);
+  tg.lineJoin = 'round';
+  tg.beginPath();
+  const step = Math.max(1, Math.round(W / 700));
+  for (let px = 0; px <= W; px += step) {
+    const y = mid - traceValue(t - TRACE_SPAN * (1 - px / W)) * amp;
+    px ? tg.lineTo(px, y) : tg.moveTo(px, y);
+  }
+  // a wide faint stroke under a thin one gives a soft glow without canvas blur (which is slow on phones)
+  tg.lineWidth = Math.max(4, H * 0.07); tg.strokeStyle = 'rgba(95,216,255,.12)'; tg.stroke();
+  tg.lineWidth = Math.max(1.5, H * 0.02); tg.strokeStyle = 'rgba(150,222,255,.45)'; tg.stroke();
+}
+
+// ======================================================================
+// ENDING "wake": the spike comes out of the shared pulse, runs along the
+// bundle and blooms; the camera pulls back out of the neuron and the head;
+// the person, now fully lit, lifts their head. Hold, then fade to dark.
+// te = seconds since T.ENDING. Returns which scene to draw and the overlays.
 // A second ending can be added to ENDINGS above; it gets the same scene.
 // ======================================================================
-function endingGlow(t, te) {
-  const RUN0 = 0.3, RUN1 = 3.0, BLOOM = 4.0, HOLD = 5.4, OUT = 7.2;
-  const X0 = -2.4, X1 = 1.9;
-  const sAt = tt => lerp(X0, X1, Math.pow(ramp(tt, RUN0, RUN1), 1.6));      // accelerating run
-  const sNow = sAt(te);
-  const look = new THREE.Vector3(lerp(CELL_LOOK.x, X1, smooth(ramp(te, RUN0, BLOOM))), 0, 0);
-  updateCell(t, look);
-
-  const pos = new THREE.Vector3(sNow, 0.02, 0.0);
-  const appear = smooth(ramp(te, 0, RUN0 + 0.2));
-  const bloom = smooth(ramp(te, RUN1 - 0.1, BLOOM));
-  const pulse = 1 + 0.06 * Math.sin(te * 3.2) * ramp(te, BLOOM, HOLD);
-  spark.update(t, pos, (0.55 + 1.9 * bloom) * pulse, appear,
-    te < RUN1 ? dt => new THREE.Vector3(sAt(te - dt), 0.02, 0) : null);
-
-  tubeMat.uniforms.uSpark.value = te < RUN1 + 0.4 ? sNow : 99;
-  tubeMat.uniforms.uLit.value = appear * (1 - bloom);
-  tubeMat.uniforms.uAfter.value = bloom * 0.7 * pulse;
-  wash.position.copy(pos);
-  wash.scale.setScalar(lerp(1, 16, bloom) * pulse);
-  wash.material.opacity = bloom * 0.75;
-
-  return smooth(ramp(te, HOLD, OUT));     // how dark the screen should be
+function endingWake(t, te) {
+  const RUN = 1.7, BLOOM = 2.4, SWITCH = 2.8, BACK = 5.6, LIFT0 = 5.0, LIFT1 = 6.5, FADE0 = 7.6, END = 8.8;
+  const traceAlpha = 1 - smooth(ramp(te, 2.6, 4.2));          // the trace fades as the camera pulls back
+  if (te < SWITCH) {
+    const X1 = 3.4;
+    const sAt = tt => lerp(X0, X1, Math.pow(ramp(tt, 0, RUN), 1.5));   // accelerating run
+    const sNow = sAt(te);
+    const look = new THREE.Vector3().lerpVectors(CELL_LOOK, new THREE.Vector3(X1, 0, 0), smooth(ramp(te, 0.2, BLOOM)));
+    updateCell(t, look, 1 - 0.8 * smooth(ramp(te, 0, 1.2)));
+    const pos = new THREE.Vector3(sNow, 0, 0);
+    const appear = smooth(ramp(te, 0, 0.15));
+    const bloom = smooth(ramp(te, RUN - 0.1, BLOOM));
+    const near = camera.position.distanceTo(pos) / 4;       // keep its size on screen as it moves away
+    spark.update(t, pos, (0.5 + 1.9 * bloom) * near, appear, te < RUN ? dt => new THREE.Vector3(sAt(te - dt), 0, 0) : null);
+    tubeShared.uSpark.value = te < RUN + 0.4 ? sNow : 99;
+    tubeShared.uLit.value = appear * (1 - bloom);
+    tubeShared.uAfter.value = bloom * 0.7;
+    wash.position.copy(pos);
+    wash.scale.setScalar(lerp(1, 16, bloom) * near);
+    wash.material.opacity = bloom * 0.75;
+    return { scene: cellScene, dark: 0, flash: smooth(ramp(te, BLOOM - 0.2, SWITCH)), trace: traceAlpha };
+  }
+  const k = 2 * (1 - ease(ramp(te, SWITCH, BACK)));                  // the fly-in path, backwards
+  const wake = smooth(ramp(te, SWITCH + 0.6, BACK));
+  const bow = lerp(BOW, LIFTED, ease(ramp(te, LIFT0, LIFT1)));
+  updateHead(t, k, wake, bow, 1 - smooth(ramp(te, SWITCH, BACK + 0.5)));
+  return { scene: headScene, dark: smooth(ramp(te, FADE0, END)), flash: 1 - smooth(ramp(te, SWITCH, SWITCH + 0.7)), trace: traceAlpha };
 }
 
 function resetEnding() {
   spark.update(0, new THREE.Vector3(), 0.01, 0, null);
-  tubeMat.uniforms.uSpark.value = -99; tubeMat.uniforms.uLit.value = 0; tubeMat.uniforms.uAfter.value = 0;
+  tubeShared.uSpark.value = -99; tubeShared.uLit.value = 0; tubeShared.uAfter.value = 0;
   wash.material.opacity = 0;
 }
 
 // ======================================================================
-// framing, playback
+// framing, labels, playback
 // ======================================================================
 function resize() {
   const w = window.innerWidth, h = window.innerHeight, a = w / h;
@@ -445,20 +597,45 @@ function resize() {
   // keep at least ~40 deg across in portrait too, so nothing is cut off on phones
   camera.fov = a >= 1 ? 40 : Math.min(80, 2 * Math.atan(Math.tan(20 * Math.PI / 180) / a) * 180 / Math.PI);
   camera.updateProjectionMatrix();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  traceCanvas.width = Math.round(traceCanvas.clientWidth * dpr); traceCanvas.height = Math.round(traceCanvas.clientHeight * dpr);
 }
 
-const flash = $('#flash'), veil = $('#veil');
+const labelAlpha = (t, t0) => smooth(ramp(t, t0, t0 + 0.4)) * (1 - smooth(ramp(t, t0 + T.LABEL_S - 0.4, t0 + T.LABEL_S)));
+const pv = new THREE.Vector3();
+function placeLabel(el, world, alpha) {
+  el.style.opacity = alpha.toFixed(3);
+  if (alpha <= 0) return;
+  pv.copy(world).project(camera);
+  const W = window.innerWidth, H = window.innerHeight, gap = H * 0.015;
+  const x = Math.min(W - el.offsetWidth - 16, Math.max(16, (pv.x + 1) / 2 * W + gap));
+  const y = Math.min(H * 0.8, Math.max(16, (1 - pv.y) / 2 * H - el.offsetHeight / 2));
+  el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+}
+
+const flash = $('#flash'), flash2 = $('#flash2'), veil = $('#veil');
 function frame(t) {
-  let dark = 1 - smooth(ramp(t, 0, 0.6));
+  let dark = 1 - smooth(ramp(t, 0, 0.6)), f1 = 0, f2 = 0, scene, trace = 1;
   if (t < T.ARRIVE) {
-    updateHead(t);
-    renderer.render(headScene, camera);
+    resetEnding();
+    headFly(t);
+    scene = headScene;
+    f1 = smooth(ramp(t, T.ARRIVE - 1.0, T.ARRIVE));
+  } else if (t < T.ENDING) {
+    resetEnding();
+    updateCell(t);
+    scene = cellScene;
+    f1 = 1 - ramp(t, T.ARRIVE, T.ARRIVE + 1.0);
   } else {
-    if (t >= T.ENDING) dark = Math.max(dark, ENDINGS[ENDING].run(t, t - T.ENDING));
-    else { resetEnding(); updateCell(t); }
-    renderer.render(cellScene, camera);
+    const r = ENDINGS[ENDING].run(t, t - T.ENDING);
+    scene = r.scene; dark = Math.max(dark, r.dark); f2 = r.flash; trace = r.trace;
   }
-  flash.style.opacity = (ramp(t, T.ARRIVE - 0.9, T.ARRIVE) * (1 - ramp(t, T.ARRIVE, T.ARRIVE + 1.1))).toFixed(3);
+  renderer.render(scene, camera);
+  placeLabel($('#lab-neuron'), w(SOMA.clone()), t < T.ARRIVE ? labelAlpha(t, T.NEURON_LABEL) : 0);
+  placeLabel($('#lab-mt'), MT_ANCHOR, scene === cellScene ? labelAlpha(t, T.MT_LABEL) : 0);
+  drawTrace(t, smooth(ramp(t, T.ARRIVE + 0.4, T.ARRIVE + 1.6)) * trace);
+  flash.style.opacity = f1.toFixed(3);
+  flash2.style.opacity = f2.toFixed(3);
   veil.style.opacity = dark.toFixed(3);
 }
 
@@ -473,7 +650,6 @@ function tick(now) {
 }
 function play() {
   $('#play').hidden = true; $('#replay').hidden = true;
-  resetEnding();
   clock = 0; playing = true; last = performance.now();
   requestAnimationFrame(tick);
 }
