@@ -58,7 +58,9 @@ def encode(path):
     data = buf.getvalue()
     return {
         'src': 'data:image/webp;base64,' + base64.b64encode(data).decode(),
-        'w': img.width, 'h': img.height, 'band': band,
+        'w': img.width, 'h': img.height,
+        # text block is centred in this; capped so every card's words sit at the same height
+        'band': min(band, 0.21),
     }, len(data)
 
 

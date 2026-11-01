@@ -41,7 +41,7 @@
     const ratio = (im.w && im.h) ? `${im.w} / ${im.h}` : '4 / 5';
     const band = im.band || 0.2;
     return `<span class="art" style="aspect-ratio:${ratio};--band:${band}">
-      <img src="${src}" alt="" draggable="false" decoding="async">
+      <img src="${src}" alt="" draggable="false">
       <span class="band"><span class="la">${c.la.toUpperCase()}</span><span class="ru" lang="ru">${c.ru}</span></span>
     </span>`;
   }
