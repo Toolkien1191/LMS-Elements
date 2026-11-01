@@ -231,6 +231,12 @@
       head.append(k);
       e.append(head);
       e.append(el('p', 'd', typo(b.d)));
+      if (b.col || b.prep) {
+        const cp = el('div', 'cp');
+        if (b.col) cp.append(el('p', 'cp-line', `<span class="cp-lab">Collocations</span> ${typo(b.col)}`));
+        if (b.prep) cp.append(el('p', 'cp-line', `<span class="cp-lab">Prepositions</span> ${typo(b.prep)}`));
+        e.append(cp);
+      }
       e.append(el('p', 'reg', `<span>${esc(b.reg)}</span>`));
       e.append(el('p', 'ex', '“' + typo(b.ex) + '”'));
       list.append(e);
