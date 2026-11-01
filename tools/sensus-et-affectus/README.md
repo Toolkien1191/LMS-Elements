@@ -15,7 +15,7 @@ A grid of 16 cards about Latin words for feelings and their English heirs (B2–
 - `build.py`: produces `sensus-et-affectus.html`.
 
 ## Build
-Put the 16 PNGs (`amor.png` … `zelotypia.png`) in `images/`, then:
+Put the 16 images (`amor.png` … `zelotypia.png`; .webp or .jpg also work) in `images/`, then:
 
 ```bash
 pip install pillow

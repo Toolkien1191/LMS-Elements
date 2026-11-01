@@ -4,8 +4,8 @@
     pip install pillow
     python3 build.py [images_dir] [output.html]
 
-images_dir defaults to ./images and must hold the 16 PNGs named after the
-Latin word (amor.png, gaudium.png, ... zelotypia.png). Each image is scaled to
+images_dir defaults to ./images and must hold the 16 images named after the
+Latin word (amor.png, gaudium.png, ... zelotypia.png; .webp or .jpg also work). Each image is scaled to
 800 px wide, saved as WebP and pasted in as base64, together with the fonts in
 ./fonts, content.js and app.js.
 """
@@ -16,6 +16,7 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 WIDTH = 800
 QUALITY = 82
+EXTS = ('.png', '.webp', '.jpg', '.jpeg')
 
 
 def band_fraction(img):
@@ -67,13 +68,17 @@ def main():
 
     content = (HERE / 'content.js').read_text(encoding='utf-8')
     names = re.findall(r"\{ la: '([a-z]+)'", content)
-    missing = [n for n in names if not (images / f'{n}.png').exists()]
+    def find(n):
+        for ext in EXTS:
+            if (images / f'{n}{ext}').exists():
+                return images / f'{n}{ext}'
+    missing = [n for n in names if not find(n)]
     if missing:
-        sys.exit(f'missing images in {images}: ' + ', '.join(f'{n}.png' for n in missing))
+        sys.exit(f'missing images in {images}: ' + ', '.join(missing))
 
     imgs, total = {}, 0
     for n in names:
-        imgs[n], size = encode(images / f'{n}.png')
+        imgs[n], size = encode(find(n))
         total += size
         print(f'  {n:<11} {imgs[n]["w"]}x{imgs[n]["h"]}  band {imgs[n]["band"]:.3f}  {size // 1024} KB')
 
