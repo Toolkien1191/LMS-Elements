@@ -12,7 +12,7 @@ A grid of 16 cards about Latin words for feelings and their English heirs (B2–
 - `app.js`: behaviour (opening, long press, matching, My words).
 - `shell.html`: page and styles. Opening it directly in a browser works for quick checks (it loads `images/*.png`, the fonts and the scripts from this folder).
 - `fonts/`: Cinzel (Latin capitals) and PT Serif (Latin + Cyrillic, with a true italic), SIL OFL.
-- `build.py`: produces `sensus-et-affectus.html`.
+- `build.py`: produces `sensus-et-affectus.html` (the deliverable, committed alongside).
 
 ## Build
 Put the 16 images (`amor.png` … `zelotypia.png`; .webp or .jpg also work) in `images/`, then:
