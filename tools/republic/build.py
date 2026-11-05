@@ -9,4 +9,8 @@ for p in exp.split(','):
 three = 'var THREE=(function(){"use strict";\n' + body + '\nreturn {' + ','.join(pairs) + '};})();'  # plain script, no module/blob import
 assert '</script' not in three
 out = open('republic.src.html').read().replace('/*THREE*/', three)
-open('republic.html', 'w').write(out); print(len(out)//1024, 'KB')
+open('republic.html', 'w').write(out); print('republic.html', len(out)//1024, 'KB')
+# the laptop ending as its own file: plays that ending without ?ending=s4 in the address
+lap = out.replace('<script>/*ENDING*/</script>', '<script>window.REPUBLIC_ENDING = "s4";</script>')
+assert lap != out
+open('republic-laptop.html', 'w').write(lap); print('republic-laptop.html', len(lap)//1024, 'KB')

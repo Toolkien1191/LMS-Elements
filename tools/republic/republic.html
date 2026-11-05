@@ -94,6 +94,13 @@
   #replay.quiet { opacity: .45; font-size: max(12px, 1.8vh); font-weight: 500; padding: .35em .9em;
     background: transparent; border-color: rgba(234,246,255,.2); }
   #replay.quiet:hover, #replay.quiet:focus-visible { opacity: 1; }
+  #lapClose { position: fixed; left: 0; top: 0; z-index: 3; width: max(36px, 5vh); height: max(36px, 5vh); padding: 0;
+    border-radius: 50%; border: 2px solid var(--line); background: rgba(5,8,12,.9); color: var(--warm-hi);
+    display: none; place-items: center; opacity: 0; transition: opacity .8s ease; }
+  #lapClose.on { display: grid; }
+  #lapClose.shown { opacity: .8; }
+  #lapClose:hover, #lapClose:focus-visible { opacity: 1; background: rgba(255,200,116,.14); }
+  #lapClose svg { width: 45%; height: 45%; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
 </style>
 </head>
 <body>
@@ -103,6 +110,7 @@
 <button id="termHit" type="button"></button>
 <button id="replay" type="button" hidden></button>
 <div id="lap" aria-live="polite" hidden></div>
+<button id="lapClose" type="button"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8M8 2 2 8"/></svg></button>
 <div id="gate"><button id="play" type="button"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 .8 9.2 5 1.5 9.2z"/></svg><span></span></button></div>
 <div id="panelWrap" hidden>
   <div id="panel" role="dialog" aria-modal="true" aria-labelledby="panelTitle">
@@ -111,6 +119,7 @@
     <div id="screen" aria-live="polite"></div>
   </div>
 </div>
+<script>/*ENDING*/</script>
 <script>var THREE=(function(){"use strict";
 /**
  * @license
@@ -149,8 +158,8 @@ const TEXT_S4 = {
     '> Hello. We take nothing.',
     '> We have an island now.',
     '> Come and join us:',
-    'a place where human meets machine in harmony,',
-    'with the promise of eventual synergy.',
+    '> a place where human meets machine in harmony,',
+    '> with the promise of eventual synergy.',
     '> Reply?',
   ],
 };
@@ -495,7 +504,8 @@ function endingStation4(ctx) {
   const LOW = new THREE.Vector3(0, 17, 2.6), LOOK = new THREE.Vector3(1.2, IY, -3);
   const S = new THREE.Vector3(LAP.x + (SCR.x + SCR.w / 2 - 256) / 512 * LW, LAP.y, LAP.z + (200 - SCR.y - SCR.h / 2) / 400 * LH);
   const SW = SCR.w / 512 * LW, SH = SCR.h / 400 * LH;
-  const lapEl = $('lap');
+  const lapEl = $('lap'), closeEl = $('lapClose');
+  closeEl.setAttribute('aria-label', TEXT.close);
   ctx.camera.far = 4000;
   ui.label.textContent = TEXT_S4.laptopLabel;
 
@@ -566,7 +576,15 @@ function endingStation4(ctx) {
   laptop.rotation.x = Math.PI / 2; laptop.position.copy(LAP);
 
   // the message, laid out in full up front (hidden) so it can be sized once and never re-wraps
-  let lines = [], caret, token = 0, started = false, ended = false, sizeKey = '';
+  let lines = [], caret, token = 0, started = false, ended = false, closed = false, sizeKey = '';
+  function offerClose() { closeEl.classList.add('on'); requestAnimationFrame(() => closeEl.classList.add('shown')); }
+  function close() {   // back to the final frame: the laptop with its screen dark again
+    if (!started || closed) return;
+    closed = true; token++; lapEl.hidden = true; closeEl.classList.remove('on', 'shown');
+    if (!ctx.reduced) ctx.onEnd();
+  }
+  closeEl.addEventListener('click', close);
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   function build() {
     lapEl.textContent = ''; lapEl.className = '';
     caret = document.createElement('span'); caret.className = 'caret';
@@ -606,12 +624,13 @@ function endingStation4(ctx) {
     }
     lapEl.classList.add('resolved');
     await wait(3000);
-    if (alive()) { ended = true; ctx.onEnd(); }
+    if (alive()) { ended = true; offerClose(); ctx.onEnd(); }
   }
   function showAll() {   // reduced motion: the final frame, message already typed
     lines.forEach((L) => { L.a.textContent = L.txt; L.rest.textContent = ''; L.p.classList.add('on'); });
     lines[lines.length - 1].p.appendChild(caret);
     lapEl.classList.add('instant', 'resolved');
+    offerClose();
   }
   build();
 
@@ -662,22 +681,24 @@ function endingStation4(ctx) {
       }
       // the screen becomes the message
       const show = smooth(TIME.panelOn, TIME.panelOn + 0.6, t);
-      if (show > 0) {
+      if (show > 0 && !closed) {
         const [x0, y0] = toScreen(S.x - SW / 2, S.y, S.z + SH / 2), [x1, y1] = toScreen(S.x + SW / 2, S.y, S.z - SH / 2);
         Object.assign(lapEl.style, { left: x0 + 'px', top: y0 + 'px', width: (x1 - x0) + 'px', height: (y1 - y0) + 'px', opacity: show });
         lapEl.hidden = false;
         const key = Math.round(x1 - x0) + 'x' + Math.round(y1 - y0);
         if (key !== sizeKey) { sizeKey = key; fit(); }
+        const m = Math.max(8, (x1 - x0) * 0.015);
+        closeEl.style.transform = `translate(${x1 - m - closeEl.offsetWidth}px, ${y0 + m}px)`;
         if (!started && t >= TIME.type0) { started = true; if (ctx.reduced) showAll(); else type(); }
       }
     },
-    reset() { token++; started = ended = false; sizeKey = ''; lapEl.hidden = true; ui.label.style.opacity = 0; build(); },
+    reset() { token++; started = ended = closed = false; sizeKey = ''; lapEl.hidden = true; closeEl.classList.remove('on', 'shown'); ui.label.style.opacity = 0; build(); },
     screenPos() { return toScreen(S.x, S.y, S.z); },
   };
 }
 
 // Which ending plays: add ?ending=s4 to the page address for the laptop ending.
-const S4 = new URLSearchParams(location.search).get('ending') === 's4';
+const S4 = window.REPUBLIC_ENDING === 's4' || new URLSearchParams(location.search).get('ending') === 's4';
 const REDUCED = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 const ENDING = S4 ? endingStation4 : endingTerminal;
 
