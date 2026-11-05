@@ -42,7 +42,7 @@
   #termHit.on { display: block; }
 
   /* ---- Replay ---- */
-  #replay { position: fixed; right: max(16px, 2.5vh); bottom: max(16px, 2.5vh); z-index: 4;
+  #replay { position: fixed; right: max(16px, 2.5vh); bottom: max(16px, 2.5vh); z-index: 7;
     font-size: max(14px, 2.4vh); font-weight: 600; padding: .45em 1.1em; border-radius: 999px;
     background: rgba(255,255,255,.08); border: 2px solid rgba(234,246,255,.3); }
   #replay:hover { background: rgba(255,255,255,.16); }
@@ -50,8 +50,9 @@
 
   /* ---- message panel ---- */
   #panelWrap { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 16px;
-    background: rgba(0,0,0,.5); }
+    background: rgba(0,0,0,.5); animation: fadeIn .6s ease both; }
   #panelWrap[hidden] { display: none; }
+  @keyframes fadeIn { from { background: rgba(0,0,0,0); } }
   #panel { width: min(100%, 130vh); background: var(--panel); border: 2px solid var(--line); border-radius: 1.6vh;
     box-shadow: 0 0 4vh rgba(255,180,80,.12), 0 2vh 6vh rgba(0,0,0,.7); overflow: hidden;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
@@ -124,7 +125,7 @@ const T = {
   centreOn: 0.35,          // the first node lights
   netStart: 1.1,           // first wave leaves the centre
   netEnd: 16,              // last (far off-screen) nodes fire
-  pullStart: 0.6, pullEnd: 19.5,   // camera pulls back
+  pullStart: 0.6, pullEnd: 18.6,   // camera pulls back
   zStart: 4.6, zEndMin: 22, minHalfWidth: 7.5,
   waveEvery: 0.85,         // nodes fire in bursts this far apart
 };
@@ -328,11 +329,14 @@ const net = { dim: { value: 1 } };
 
 // ---------------------------------------------------------------------
 // ENDING: "Central Bank, Terminal 7" (steps 3-7).
+// The terminal sends out a signal and then opens the message panel by itself
+// (growing out of the terminal), so nobody has to find the click.
 // A second ending can be written as another function with the same shape
-// ({ clearZones, layout(aspect), update(t), reset() }) and chosen at ENDING below.
+// ({ clearZones, focus, layout(aspect), update(t), reset(), screenPos() }) and chosen at ENDING below.
 // ---------------------------------------------------------------------
 function endingTerminal(ctx) {
-  const TIME = { dim0: 13.2, dim1: 16.5, branch0: 14.2, branch1: 20.4, termOn: 20.4, labelOn: 20.9, invite: 21.6, ready: 22.4 };
+  const TIME = { dim0: 12, dim1: 15.3, branch0: 13, branch1: 18.6, termOn: 18.6, labelOn: 19.1,
+    signal: 19.2, signalEvery: 0.5, signalLife: 1.8, open: 20.8 };
   const POS = new THREE.Vector3(10, -5.6, 0);   // where the terminal sits in the network
   const ICON = 2.1;                              // icon width, world units
   const WARM = 0xffc874, WARM_HI = 0xfff1d0;
@@ -374,12 +378,18 @@ function endingTerminal(ctx) {
   const haloMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(hc), color: 0xff9a3a, transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
   const halo = new THREE.Mesh(new THREE.PlaneGeometry(ICON * 2.6, ICON * 2.6), haloMat);
   halo.position.copy(POS);
+  // the signal: rings that ripple out of the terminal just before it opens
+  const rings = [0, 1, 2].map(() => {
+    const m = new THREE.Mesh(new THREE.RingGeometry(ICON * 0.57, ICON * 0.6, 96),
+      new THREE.MeshBasicMaterial({ color: WARM, transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending }));
+    m.position.copy(POS); m.visible = false; group.add(m); return m;
+  });
   group.add(halo, icon);
   group.children.forEach((o, i) => { o.renderOrder = 10 + i; });
   ctx.scene.add(group);
 
   const focus = new THREE.Vector2(), v = new THREE.Vector3();
-  let ready = false;
+  let opened = false;
   const toScreen = (x, y) => { v.set(x, y, POS.z).project(ctx.camera); return [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight]; };
 
   return {
@@ -395,7 +405,12 @@ function endingTerminal(ctx) {
     update(t) {
       ctx.net.dim.value = 1 - 0.4 * smooth(TIME.dim0, TIME.dim1, t);
       const lit = smooth(TIME.termOn, TIME.termOn + 0.8, t), flash = t > TIME.termOn ? Math.exp(-(t - TIME.termOn) * 1.8) : 0;
-      const pulse = t > TIME.invite ? 0.5 - 0.5 * Math.cos((t - TIME.invite) * Math.PI * 2 / 2.4) : 0;
+      const pulse = t > TIME.open ? 0.5 - 0.5 * Math.cos((t - TIME.open) * Math.PI * 2 / 2.4) : 0;
+      rings.forEach((m, i) => {
+        const age = t - TIME.signal - i * TIME.signalEvery, f = age / TIME.signalLife;
+        m.visible = f > 0 && f < 1;
+        if (m.visible) { m.scale.setScalar(1 + f * 3.4); m.material.opacity = 0.9 * Math.pow(1 - f, 1.6); }
+      });
       iconMat.opacity = lit * (0.82 + 0.18 * pulse + 0.6 * flash);
       haloMat.opacity = lit * (0.22 + 0.3 * pulse + 0.5 * flash);
       halo.scale.setScalar(1 + 0.14 * pulse);
@@ -407,17 +422,18 @@ function endingTerminal(ctx) {
         const x = Math.min(innerWidth - w - m, Math.max(m, lx - w / 2));
         ui.label.style.transform = `translate(${x}px, ${ly + innerHeight * 0.012}px)`;
       }
-      // click target over icon + label
-      if (t >= TIME.invite) {
+      // click target over icon + label, for opening the message again after closing it
+      if (t >= TIME.open) {
         const [x0, y0] = toScreen(POS.x - ICON * 0.6, POS.y + ICON * 0.5), [x1, y1] = toScreen(POS.x + ICON * 0.6, POS.y - ICON * 0.5);
         const lb = ui.label.getBoundingClientRect();
         const L = Math.min(x0, lb.left) - 8, R = Math.max(x1, lb.right) + 8, B = lb.bottom + 8;
         Object.assign(ui.hit.style, { left: L + 'px', top: (y0 - 8) + 'px', width: (R - L) + 'px', height: (B - y0 + 8) + 'px' });
         ui.hit.classList.add('on');
       }
-      if (!ready && t >= TIME.ready) { ready = true; ctx.onReady(); }
+      if (!opened && t >= TIME.open) { opened = true; ctx.openPanel(); }
     },
-    reset() { ready = false; ui.hit.classList.remove('on'); ui.label.style.opacity = 0; },
+    reset() { opened = false; ui.hit.classList.remove('on'); ui.label.style.opacity = 0; },
+    screenPos() { return toScreen(POS.x, POS.y); },
   };
 }
 
@@ -426,7 +442,7 @@ const ENDING = endingTerminal;
 // ---------------------------------------------------------------------
 // Assemble
 // ---------------------------------------------------------------------
-const ending = ENDING({ scene, camera, net, onReady: () => { if (ui.wrap.hidden) ui.replay.hidden = false; } });
+const ending = ENDING({ scene, camera, net, openPanel: () => openPanel() });
 const built = growNetwork(ending.clearZones);
 const netLinks = makeLinks(built.linkList, 0x5aa9e6, 0xdff3ff, 2.4, 0.5, net.dim);
 const netNodes = makeNodes(built.nodeList, 0xa9dcff, 0xffffff, net.dim);
@@ -465,8 +481,9 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
+let done = false;   // the message has been read through once: Replay may show
 function start() {
-  time = 0; running = true; ending.reset(); closePanel(false);
+  time = 0; running = true; done = false; ending.reset(); closePanel(false);
   ui.gate.hidden = true; ui.replay.hidden = true;
 }
 ui.play.addEventListener('click', start);
@@ -481,9 +498,16 @@ async function openPanel() {
   const my = ++typing, alive = () => my === typing;
   ui.wrap.hidden = false; ui.replay.hidden = true;
   ui.screen.textContent = ''; ui.screen.classList.remove('resolved');
-  ui.close.focus();
+  ui.close.focus({ preventScroll: true });
+  const panel = ui.close.closest('#panel'), box = panel.getBoundingClientRect(), [tx, ty] = ending.screenPos();
+  const dx = tx - (box.left + box.width / 2), dy = ty - (box.top + box.height / 2);
+  if (panel.animate) panel.animate([
+    { transform: `translate(${dx}px, ${dy}px) scale(.04)`, opacity: 0 },
+    { opacity: 1, offset: 0.35 },
+    { transform: 'none', opacity: 1 },
+  ], { duration: 800, easing: 'cubic-bezier(.2,.7,.2,1)' });
   const caret = document.createElement('span'); caret.className = 'caret';
-  await wait(450);
+  await wait(950);
   for (let i = 0; i < TEXT.message.length; i++) {
     if (!alive()) return;
     const line = TEXT.message[i], p = document.createElement('p'), span = document.createElement('span');
@@ -495,17 +519,20 @@ async function openPanel() {
     for (; k < line.length; k++) {
       if (!alive()) return;
       span.textContent = line.slice(0, k + 1);
-      await wait(34 + Math.random() * 40 + (line[k] === ' ' ? 30 : 0));
+      await wait(28 + Math.random() * 30 + (line[k] === ' ' ? 24 : 0));
     }
-    await wait(i === TEXT.message.length - 1 ? 700 : 520);
+    await wait(i === TEXT.message.length - 1 ? 700 : 450);
   }
-  if (alive()) ui.screen.classList.add('resolved');
+  if (!alive()) return;
+  ui.screen.classList.add('resolved');
+  await wait(2400);
+  if (alive()) { done = true; ui.replay.hidden = false; }
 }
 function closePanel(refocus = true) {
   typing++;
   if (ui.wrap.hidden) return;
   ui.wrap.hidden = true;
-  if (running && ui.hit.classList.contains('on')) ui.replay.hidden = false;
+  if (running) ui.replay.hidden = false;
   if (refocus) ui.hit.focus();
 }
 ui.hit.addEventListener('click', openPanel);
